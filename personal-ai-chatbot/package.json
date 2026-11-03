@@ -13,10 +13,6 @@
     "build:frontend": "npm --prefix frontend run build",
     "lint:frontend": "npm --prefix frontend run lint"
   },
-  "dependencies": {
-    "vtubestudio": "^3.11.0",
-    "ws": "^8.21.3"
-  },
   "devDependencies": {
     "concurrently": "^10.0.6"
   }

@@ -81,13 +81,24 @@ export class EdgeTtsService {
 
     const outputStream = new PassThrough();
     const collectedChunks = [];
+    let stderrData = "";
 
     child.stdout.on("data", (chunk) => {
       collectedChunks.push(chunk);
       outputStream.write(chunk);
     });
 
-    child.stdout.on("end", () => {
+    child.stderr.on("data", (data) => {
+      stderrData += data.toString();
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0) {
+        const errMsg = stderrData.trim() || `TTS process exited with code ${code}`;
+        logger.error(`Edge TTS Error: ${errMsg}`);
+        outputStream.destroy(new Error(errMsg));
+        return;
+      }
       outputStream.end();
       if (collectedChunks.length > 0) {
         const fullBuffer = Buffer.concat(collectedChunks);
@@ -100,6 +111,7 @@ export class EdgeTtsService {
     });
 
     child.on("error", (err) => {
+      logger.error(`Edge TTS spawn error: ${err.message}`);
       outputStream.destroy(err);
     });
 

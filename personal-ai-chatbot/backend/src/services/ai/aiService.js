@@ -100,13 +100,12 @@ ${roleInstructions}
   }
 
   async generateReply({ userId, userRole, message, chatHistory = [], preferredProvider = null }) {
-    // 1. Process memory extraction
-    memoryService.processChatMessage(userId, userRole, message);
+    // 1. Process memory extraction & get fresh temp memory
+    const { tempMemory } = memoryService.processChatMessage(userId, userRole, message);
 
     // 2. Fetch up-to-date memory context
     const coreMemory = memoryService.getCoreMemory();
     const userMemory = memoryService.getUserMemory(userId);
-    const tempMemory = memoryService.getTemporaryMemory(userId);
 
     // 3. Detect emotion and trigger VTube Studio
     const emotionData = detectEmotion(message);

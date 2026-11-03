@@ -48,6 +48,27 @@ class ChatHistoryService {
     return updated;
   }
 
+  appendAssistantMessage(userId, assistantMessage) {
+    this.load();
+    const current = this.getHistory(userId);
+    const updated = [
+      ...current,
+      { role: "assistant", content: assistantMessage, timestamp: Date.now(), isProactive: true },
+    ].slice(-CHAT_LIMITS.MAX_HISTORY_TURNS);
+
+    this.inMemoryHistories.set(userId, updated);
+
+    const sessionData = loadJsonFile(SESSION_MEMORY_FILE, { users: {} });
+    if (!sessionData.users) sessionData.users = {};
+    sessionData.users[userId] = {
+      conversations: updated,
+      lastUpdated: Date.now(),
+    };
+    saveJsonFileQueued(SESSION_MEMORY_FILE, sessionData);
+
+    return updated;
+  }
+
   clearHistory(userId) {
     this.load();
     this.inMemoryHistories.delete(userId);

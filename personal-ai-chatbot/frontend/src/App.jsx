@@ -71,28 +71,24 @@ function App() {
 
       try {
         const audioUrl = ttsApi.getAudioUrl(targetText, "id-ID-GadisNeural", "+25Hz", "+10%");
-        const audio = new Audio(audioUrl);
+        const res = await fetch(audioUrl);
+        if (!res.ok) throw new Error(`TTS server responded with ${res.status}`);
+        const blob = await res.blob();
+        if (!blob || blob.size === 0) throw new Error("Empty audio response");
+
+        const blobUrl = URL.createObjectURL(blob);
+        activeBlobUrlRef.current = blobUrl;
+        const audio = new Audio(blobUrl);
         audioRef.current = audio;
         await audio.play();
       } catch (err) {
-        console.warn("Direct stream play error, trying blob fallback:", err.message);
-        try {
-          const audioUrl = ttsApi.getAudioUrl(targetText, "id-ID-GadisNeural", "+25Hz", "+10%");
-          const res = await fetch(audioUrl);
-          const blob = await res.blob();
-          const blobUrl = URL.createObjectURL(blob);
-          activeBlobUrlRef.current = blobUrl;
-          const fallbackAudio = new Audio(blobUrl);
-          audioRef.current = fallbackAudio;
-          await fallbackAudio.play();
-        } catch {
-          if (window.speechSynthesis) {
-            const utterance = new SpeechSynthesisUtterance(targetText);
-            utterance.lang = "id-ID";
-            utterance.rate = 1.0;
-            utterance.pitch = 1.2;
-            window.speechSynthesis.speak(utterance);
-          }
+        console.warn("Neural TTS unavailable, falling back to Web Speech:", err.message);
+        if (window.speechSynthesis) {
+          const utterance = new SpeechSynthesisUtterance(targetText);
+          utterance.lang = "id-ID";
+          utterance.rate = 1.0;
+          utterance.pitch = 1.2;
+          window.speechSynthesis.speak(utterance);
         }
       }
     },

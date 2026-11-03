@@ -258,21 +258,24 @@ class MemoryService {
   // PROCESS CHAT MESSAGE FOR MEMORY EXTRACTION
   // ==========================================
   processChatMessage(userId, userRole, message) {
-    this.addTemporaryMemory(userId, message);
+    const tempMemory = this.addTemporaryMemory(userId, message);
 
     const classification = classifyMemoryCandidate(message);
     if (classification.type !== "core") {
-      return null;
+      return { tempMemory, item: null };
     }
 
     if (userRole === "owner") {
       const isIdentity = /nama pencipta|creator|penciptaku|tujuanku|tujuan dibuat|alfaa|2026/i.test(message);
       if (isIdentity) {
-        return this.addCoreFact(message);
+        return { tempMemory, item: this.addCoreFact(message) };
       }
     }
 
-    return this.addUserMemoryItem(userId, message, classification.category, classification.importance);
+    return {
+      tempMemory,
+      item: this.addUserMemoryItem(userId, message, classification.category, classification.importance),
+    };
   }
 }
 

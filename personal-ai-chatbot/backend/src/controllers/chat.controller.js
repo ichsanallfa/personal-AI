@@ -1,5 +1,6 @@
 import { aiService } from "../services/ai/aiService.js";
 import { chatHistoryService } from "../services/memory/chatHistoryService.js";
+import { proactiveThoughtService } from "../services/ai/proactiveThoughtService.js";
 import { ROLES } from "../config/constants.js";
 
 export const handleChat = async (req, res, next) => {
@@ -7,6 +8,9 @@ export const handleChat = async (req, res, next) => {
     const { message, preferredProvider } = req.body;
     const userId = req.user?.userId || req.headers["x-user-id"] || "anonymous_user";
     const userRole = req.user?.role || ROLES.PUBLIC;
+
+    // Reset proactive unresponded counter when owner chats
+    proactiveThoughtService.notifyUserActivity();
 
     // Load recent conversation history
     const history = chatHistoryService.getHistory(userId);

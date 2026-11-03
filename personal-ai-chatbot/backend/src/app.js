@@ -14,6 +14,8 @@ import reminderRoutes from "./routes/reminder.routes.js";
 import vtubeRoutes from "./routes/vtube.routes.js";
 import healthRoutes from "./routes/health.routes.js";
 import ttsRoutes from "./routes/tts.routes.js";
+import osuRoutes from "./routes/osu.routes.js";
+import proactiveRoutes from "./routes/proactive.routes.js";
 
 /**
  * Initialise the Express application with common middlewares.
@@ -41,6 +43,8 @@ app.use("/api/reminders", reminderRoutes);
 app.use("/api/vtube", vtubeRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/tts", ttsRoutes);
+app.use("/api/game/osu", osuRoutes);
+app.use("/api/proactive", proactiveRoutes);
 
 // Backward Compatibility for Legacy /chat Endpoint
 app.use("/chat", chatRoutes);

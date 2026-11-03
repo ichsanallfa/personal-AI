@@ -19,19 +19,21 @@ export class GeminiProvider extends BaseAIProvider {
 
     const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${config.geminiApiKey}`;
 
-    const contents = [
-      {
-        role: "user",
-        parts: [{ text: `SYSTEM INSTRUCTIONS:\n${systemPrompt}` }],
-      },
-      ...messages.map((m) => ({
+    const payload = {
+      contents: messages.map((m) => ({
         role: m.role === "assistant" ? "model" : "user",
         parts: [{ text: m.content }],
       })),
-    ];
+    };
+
+    if (systemPrompt) {
+      payload.system_instruction = {
+        parts: [{ text: systemPrompt }],
+      };
+    }
 
     try {
-      const response = await axios.post(endpoint, { contents }, { timeout: 30000 });
+      const response = await axios.post(endpoint, payload, { timeout: 30000 });
       const candidate = response.data?.candidates?.[0];
       const text = candidate?.content?.parts?.[0]?.text;
       if (!text) {

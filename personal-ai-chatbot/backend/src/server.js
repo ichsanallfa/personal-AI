@@ -3,6 +3,7 @@ import { config } from "./config/env.js";
 import { memoryService } from "./services/memory/memoryService.js";
 import { reminderService } from "./services/reminder/reminderService.js";
 import { vtubeService } from "./services/vtube/vtubeService.js";
+import { proactiveThoughtService } from "./services/ai/proactiveThoughtService.js";
 import { closeDatabase } from "./storage/sqliteStorage.js";
 import { logger } from "./utils/logger.js";
 
@@ -21,6 +22,9 @@ export const startServer = () => {
 
   // Start Reminder Background Scheduler
   reminderService.startScheduler();
+
+  // Start Autonomous Proactive Thought Engine
+  proactiveThoughtService.startScheduler();
 
   // Initialize VTube Studio Connection
   vtubeService.initialize();
@@ -66,6 +70,7 @@ if (isMain) {
     logger.info("Shutting down Lucy AI Backend Server...");
 
     reminderService.stopScheduler();
+    proactiveThoughtService.stopScheduler();
     vtubeService.disconnect();
 
     try {
