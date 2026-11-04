@@ -30,8 +30,10 @@ app.use(
 app.use(morgan('combined'));
 
 // CORS Configuration
-const originSetting = config.frontendUrl === "*" ? true : config.frontendUrl.split(",").map((s) => s.trim());
-app.use(cors({ origin: originSetting }));
+const originSetting = config.frontendUrl === "*"
+  ? ["http://localhost:5173"]
+  : config.frontendUrl.split(",").map((s) => s.trim()).filter(Boolean);
+app.use(cors({ origin: originSetting, credentials: true }));
 
 app.use(express.json({ limit: "1mb" }));
 

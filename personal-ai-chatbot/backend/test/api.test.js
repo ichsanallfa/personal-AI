@@ -59,6 +59,11 @@ test("API: Validation error on missing chat message returns 400 with VALIDATION_
   const res = await makeRequest(server, {
     method: "POST",
     path: "/api/chat",
+    headers: {
+      "x-service-key": config.serviceApiKey,
+      "x-user-id": "api_test_user",
+      "x-platform": "discord",
+    },
     body: {},
   });
 
@@ -77,7 +82,7 @@ test("API: 404 for unknown endpoint returns NOT_FOUND standard error", async (t)
   assert.equal(res.data.error.code, "NOT_FOUND");
 });
 
-test("API: Chat endpoint works with mock provider", async (t) => {
+test("API: Chat endpoint rejects spoofed identity without authentication", async (t) => {
   const server = http.createServer(app).listen(0);
   t.after(() => server.close());
 
@@ -93,8 +98,35 @@ test("API: Chat endpoint works with mock provider", async (t) => {
     },
   });
 
+  assert.equal(res.status, 401);
+  assert.equal(res.data.success, false);
+  assert.equal(res.data.error.code, "UNAUTHORIZED");
+});
+
+test("API: Chat endpoint works with verified service key", async (t) => {
+  const server = http.createServer(app).listen(0);
+  t.after(() => server.close());
+
+  const res = await makeRequest(server, {
+    method: "POST",
+    path: "/api/chat",
+    headers: {
+      "x-service-key": config.serviceApiKey,
+      "x-user-id": "api_test_user",
+      "x-platform": "discord",
+    },
+    body: { message: "Halo Lucy, ini tes otomatis", preferredProvider: "mock" },
+  });
+
   assert.equal(res.status, 200);
   assert.equal(res.data.success, true);
   assert.ok(res.data.data.reply);
-  assert.ok(res.data.reply); // Backward compatibility check
+  assert.ok(res.data.reply);
+});
+
+test("API: CORS does not reflect arbitrary origins by default", async (t) => {
+  const server = http.createServer(app).listen(0);
+  t.after(() => server.close());
+  const res = await makeRequest(server, { path: "/api/health", headers: { Origin: "https://attacker.example" } });
+  assert.notEqual(res.headers["access-control-allow-origin"], "https://attacker.example");
 });

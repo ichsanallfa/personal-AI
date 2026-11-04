@@ -9,7 +9,7 @@
     "start": "node server.js",
     "bot:discord": "node discordBot.js",
     "bot:telegram": "node telegramBot.js",
-    "test": "node --test test/*.test.js"
+    "test": "node --import ./test/setup.js --test test/*.test.js"
   },
   "keywords": [],
   "author": "",

@@ -1,8 +1,5 @@
 export function Header({
   user,
-  voiceEnabled,
-  onToggleVoice,
-  onStopVoice,
   onOpenOwnerModal,
   onLogout,
   onOpenReminders,

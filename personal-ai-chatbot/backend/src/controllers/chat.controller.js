@@ -6,14 +6,30 @@ import { ROLES } from "../config/constants.js";
 export const handleChat = async (req, res, next) => {
   try {
     const { message, preferredProvider } = req.body;
-    const userId = req.user?.userId || req.headers["x-user-id"] || "anonymous_user";
+    const userId = req.user?.userId || "anonymous_user";
     const userRole = req.user?.role || ROLES.PUBLIC;
-
-    // Reset proactive unresponded counter when owner chats
-    proactiveThoughtService.notifyUserActivity();
+    const platform = req.user?.platform || req.headers["x-platform"] || null;
 
     // Load recent conversation history
     const history = chatHistoryService.getHistory(userId);
+
+    // Detect if owner is responding to an unanswered proactive message
+    const lastHistoryItem = history[history.length - 1];
+    const hadProactiveOutreach =
+      (proactiveThoughtService.unrespondedPings > 0 && Boolean(proactiveThoughtService.lastProactiveMessage)) ||
+      Boolean(lastHistoryItem?.isProactive);
+
+    const proactiveContext = hadProactiveOutreach
+      ? {
+          wasLastProactive: true,
+          text: lastHistoryItem?.isProactive
+            ? lastHistoryItem.content
+            : proactiveThoughtService.lastProactiveMessage,
+        }
+      : null;
+
+    // Reset proactive unresponded counter and refresh interaction timestamps
+    proactiveThoughtService.notifyUserActivity(platform);
 
     // Generate AI response
     const result = await aiService.generateReply({
@@ -22,7 +38,11 @@ export const handleChat = async (req, res, next) => {
       message,
       chatHistory: history,
       preferredProvider,
+      proactiveContext,
     });
+
+    // Mark assistant spoken timestamp so scheduler knows conversation is ongoing
+    proactiveThoughtService.lastSpokenAt = Date.now();
 
     // Save assistant reply to conversation history
     chatHistoryService.appendTurn(userId, message, result.reply);

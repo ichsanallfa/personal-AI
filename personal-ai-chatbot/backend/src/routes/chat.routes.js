@@ -1,6 +1,6 @@
 import express from "express";
 import { handleChat, getHistory, clearHistory } from "../controllers/chat.controller.js";
-import { authenticate, requireAuth } from "../middlewares/auth.middleware.js";
+import { requireAuth } from "../middlewares/auth.middleware.js";
 import { validate } from "../middlewares/validation.middleware.js";
 import { chatRateLimiter } from "../middlewares/rateLimiter.middleware.js";
 import { CHAT_LIMITS } from "../config/constants.js";
@@ -9,7 +9,7 @@ const router = express.Router();
 
 router.post(
   "/",
-  authenticate,
+  requireAuth,
   chatRateLimiter,
   validate({
     body: {

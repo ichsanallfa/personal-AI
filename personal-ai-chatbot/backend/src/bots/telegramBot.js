@@ -1,6 +1,7 @@
 import TelegramBot from "node-telegram-bot-api";
 import axios from "axios";
 import { config } from "../config/env.js";
+import { removeStageDirections } from "../services/ai/responseText.js";
 import { reminderService } from "../services/reminder/reminderService.js";
 import { logger } from "../utils/logger.js";
 
@@ -20,7 +21,7 @@ export const startTelegramBot = () => {
     if (!botEnabled) return;
     const allowed = config.telegramAllowedUsers.includes(userId) || config.allowedUserIds.includes(userId) || owner;
     if (!allowed) return bot.sendMessage(chatId, "Kamu belum diizinkan menggunakan Lucy.");
-    try { const response = await axios.post(config.backendUrl, { message: text }, { headers: { "x-service-key": config.serviceApiKey, "x-user-id": userId, "x-platform": "telegram" } }); return bot.sendMessage(chatId, response.data.data?.reply || response.data.reply || "Maaf, ada kendala."); } catch (error) { logger.error("Telegram bot backend error:", error.response?.data || error.message); return bot.sendMessage(chatId, "Error communicating dengan Lucy AI."); }
+    try { const response = await axios.post(config.backendUrl, { message: text }, { headers: { "x-service-key": config.serviceApiKey, "x-user-id": userId, "x-platform": "telegram" } }); return bot.sendMessage(chatId, removeStageDirections(response.data.data?.reply || response.data.reply || "Maaf, ada kendala.")); } catch (error) { logger.error("Telegram bot backend error:", error.response?.data || error.message); return bot.sendMessage(chatId, "Error communicating dengan Lucy AI."); }
   });
   return true;
 };

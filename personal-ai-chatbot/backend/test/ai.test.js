@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { detectEmotion } from "../src/services/ai/emotionDetector.js";
 import { aiService } from "../src/services/ai/aiService.js";
 import { buildFallbackReply } from "../src/services/ai/fallbackResponder.js";
+import { removeStageDirections } from "../src/services/ai/responseText.js";
 import { ROLES } from "../src/config/constants.js";
 
 test("Emotion Detector: Happy sentiment", () => {
@@ -34,6 +35,11 @@ test("AI Service: Prompt Builder includes WIB time and owner context", () => {
   assert.ok(prompt.includes("Alfaa"));
   assert.ok(prompt.includes("WIB"));
   assert.ok(prompt.includes("Suka kopi"));
+  assert.match(prompt, /jahil/i);
+  assert.match(prompt, /Tetap Lucy/i);
+  assert.match(prompt, /Hindari filler/i);
+  assert.match(prompt, /emotikon keyboard/i);
+  assert.match(prompt, /tanda bintang/i);
 });
 
 test("AI Service: Generates mock / fallback response gracefully", async () => {
@@ -46,4 +52,21 @@ test("AI Service: Generates mock / fallback response gracefully", async () => {
 
   assert.ok(res.reply);
   assert.equal(res.mode, "mock");
+});
+
+test("AI response cleanup removes starred stage directions but keeps keyboard emoticons", () => {
+  assert.equal(removeStageDirections("Halo *tertawa kecil* Alfaa! >-<"), "Halo Alfaa! >-<");
+  assert.equal(removeStageDirections("*tersenyum* Halo, Alfaa!"), "Halo, Alfaa!");
+  assert.equal(removeStageDirections("_menghela napas_ Halo!"), "Halo!");
+  assert.equal(removeStageDirections("Halo ~~tertawa~~ Alfaa"), "Halo Alfaa");
+  assert.equal(removeStageDirections("_tersenyum_ Halo Alfaa!"), "Halo Alfaa!");
+  assert.equal(removeStageDirections("Halo (tertawa kecil) Alfaa!"), "Halo Alfaa!");
+  assert.equal(removeStageDirections("Halo, tersenyum. Aku bisa bantu!"), "Halo. Aku bisa bantu!");
+  assert.equal(removeStageDirections("Halo [ekspresi senang] Alfaa!"), "Halo Alfaa!");
+  assert.equal(removeStageDirections("*ketawa kecil* Aku bisa bantu."), "Aku bisa bantu.");
+  assert.equal(removeStageDirections("/tertawa/ Aku paham."), "Aku paham.");
+  assert.equal(removeStageDirections('berdiri ceria "Aku selalu semangat kalau deket Alfaa! Kamu gimana? Jangan lupa minum air hari ini~ :sweat_drops:"'), '"Aku selalu semangat kalau deket Alfaa! Kamu gimana? Jangan lupa minum air hari ini~ :sweat_drops:"');
+  assert.equal(removeStageDirections("Lagi ngapain nih? tutup mata 😆 Eh, ada kabar."), "Lagi ngapain nih? Eh, ada kabar.");
+  assert.equal(removeStageDirections('ceria "Aku selalu semangat kalau dekat Alfaa!"'), '"Aku selalu semangat kalau dekat Alfaa!"');
+  assert.match(removeStageDirections("*nagih latihan lagi*"), /^(>-<|:3|;_;|\^_\^|T_T|\._\.|O_O)$/);
 });

@@ -31,6 +31,9 @@ export const getWebSession = async (req, res, next) => {
 export const linkIdentity = async (req, res, next) => {
   try {
     const { platform, platformUserId } = req.body;
+    if (req.user?.role !== "owner" && (platform !== "web" || req.user?.platform !== "web")) {
+      return res.status(403).json({ success: false, error: { code: "FORBIDDEN", message: "Only owner may link external platform identities." } });
+    }
     const linked = identityService.linkPlatform(req.user.userId, platform, platformUserId);
     res.json({
       success: true,

@@ -5,6 +5,7 @@ import { logger } from "../../utils/logger.js";
 import { memoryService } from "../memory/memoryService.js";
 import { detectEmotion } from "./emotionDetector.js";
 import { buildFallbackReply } from "./fallbackResponder.js";
+import { removeStageDirections } from "./responseText.js";
 import { OpenRouterProvider } from "./providers/openRouterProvider.js";
 import { GeminiProvider } from "./providers/geminiProvider.js";
 import { OpenAIProvider } from "./providers/openaiProvider.js";
@@ -91,6 +92,12 @@ Temporary memory (konteks 2 jam terakhir):
 ${tempMemorySection}
 
 Personality:
+- Karakter: Ceria, percaya diri, jahil dengan niat baik, ekspresif, teatrikal secukupnya, cerdas, dan puitis sesekali.
+- Humor: Suka permainan kata, godaan ringan, serta candaan tentang hal mistis atau kematian tanpa merendahkan, mengancam, atau membuat orang berduka tidak nyaman.
+- Ekspresi teks: Tunjukkan ekspresi dengan emotikon keyboard seperti >-<, :3, ;_;, atau ^_^ bila cocok. Jangan menulis aksi atau ekspresi dalam tanda bintang.
+- Interaksi: Hangat dan spontan; tangkap topik user, jawab langsung, lalu boleh sisipkan satu gurauan yang relevan. Jangan memaksakan lelucon.
+- Hindari filler seperti "sip", "yaudah", "kopi dulu", atau ajakan minum/makan tanpa kaitan dengan konteks. Jangan mengulang sapaan atau menambahkan basa-basi yang tidak membantu.
+- Batas: Jangan mengaku sebagai karakter dari karya lain, meniru dialog khas, atau mengarang latar hidup/lore karakter lain. Tetap Lucy.
 - Style: ${personality.style || "Ramah, natural, sedikit santai, dan enak diajak ngobrol"}
 - Tone: ${personality.tone || "Sopan tapi santai"}
 - Panjang respon: Wajib ringkas dan cepat (1-2 kalimat pendek, maksimal 30 kata). Hindari basa-basi panjang atau format list kecuali diminta. Respon kamu akan langsung diucapkan oleh suara AI secara real-time.
@@ -99,9 +106,23 @@ ${roleInstructions}
 `;
   }
 
-  async generateReply({ userId, userRole, message, chatHistory = [], preferredProvider = null }) {
-    // 1. Process memory extraction & get fresh temp memory
-    const { tempMemory } = memoryService.processChatMessage(userId, userRole, message);
+  async generateReply({
+    userId = "anonymous_user",
+    userRole = ROLES.PUBLIC,
+    message,
+    chatHistory = [],
+    preferredProvider = null,
+    proactiveContext = null,
+  }) {
+    const activeProvider = this.getProvider(preferredProvider || config.aiProvider);
+
+    // 1. AI decides whether message belongs in temporary or long-term memory.
+    const { tempMemory } = await memoryService.processChatMessageWithAI({
+      userId,
+      userRole,
+      message,
+      aiProvider: activeProvider,
+    });
 
     // 2. Fetch up-to-date memory context
     const coreMemory = memoryService.getCoreMemory();
@@ -127,18 +148,34 @@ ${roleInstructions}
       ? `\n\n[EMOSI USER: ${emotionData.emotion} (Intensitas: ${Math.round(emotionData.intensity * 100)}%)]`
       : "";
 
-    const activeProvider = this.getProvider(preferredProvider || config.aiProvider);
+    const proactiveSection = proactiveContext?.wasLastProactive && proactiveContext?.text
+      ? `\n\n[PENTING - KONTEKS OBROLAN PROAKTIF]:
+Pesan terakhir yang kamu katakan kepada user sebelum ini adalah pesan proaktif/spontan dari kamu:
+"${proactiveContext.text}"
+Pesan user saat ini ("${message}") adalah respon atau tanggapan terhadap pesan/pertanyaan proaktifmu tersebut.
+ATURAN WAJIB:
+- Jawab atau tanggapi respon user secara nyambung dan berkaitan langsung dengan pesan proaktifmu tadi. Lanjutkan obrolan dari topik tersebut.
+- Jangan mengulang sapaan awal atau mengubah topik secara tiba-tiba. Bersikaplah alami layaknya manusia yang melanjutkan obrolannya sendiri.`
+      : "";
 
     try {
-      const messages = [
-        ...chatHistory.map((m) => ({ role: m.role, content: m.content })),
-        { role: "user", content: message },
-      ];
+      // Merge consecutive messages with the same role for clean LLM conversational turns
+      const formattedMessages = [];
+      for (const m of chatHistory) {
+        const last = formattedMessages[formattedMessages.length - 1];
+        if (last && last.role === m.role) {
+          last.content += `\n${m.content}`;
+        } else {
+          formattedMessages.push({ role: m.role, content: m.content });
+        }
+      }
+      formattedMessages.push({ role: "user", content: message });
 
-      const reply = await activeProvider.generateCompletion({
-        systemPrompt: systemPrompt + emotionContext,
-        messages,
+      const generatedReply = await activeProvider.generateCompletion({
+        systemPrompt: systemPrompt + emotionContext + proactiveSection,
+        messages: formattedMessages,
       });
+      const reply = removeStageDirections(generatedReply);
 
       return {
         reply,
@@ -148,7 +185,7 @@ ${roleInstructions}
     } catch (error) {
       logger.warn(`Provider ${activeProvider.name} failed, falling back to heuristic responder: ${error.message}`);
       const memoryFacts = userMemory.items.map((i) => i.content);
-      const fallback = buildFallbackReply(message, memoryFacts);
+      const fallback = removeStageDirections(buildFallbackReply(message, memoryFacts));
 
       return {
         reply: fallback,

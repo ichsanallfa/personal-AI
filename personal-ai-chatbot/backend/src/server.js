@@ -16,21 +16,20 @@ import { logger } from "./utils/logger.js";
 
 export const startServer = () => {
   logger.info("Initializing Lucy AI Backend Services...");
+  const isTest = process.env.NODE_ENV === "test" || process.env.VITEST === "true";
 
   // Initialize Memory
   memoryService.initialize();
 
-  // Start Reminder Background Scheduler
-  reminderService.startScheduler();
-
-  // Start Autonomous Proactive Thought Engine
-  proactiveThoughtService.startScheduler();
-
-  // Initialize VTube Studio Connection
-  vtubeService.initialize();
+  if (!isTest) {
+    // Start background schedulers only in runtime mode.
+    reminderService.startScheduler();
+    proactiveThoughtService.startScheduler();
+    vtubeService.initialize();
+  }
 
   // Auto-start bots if enabled and tokens exist
-  if (config.autoStartBots) {
+  if (!isTest && config.autoStartBots) {
     if (config.discordBotToken) {
       import("./bots/discordBot.js")
         .then(({ startDiscordBot }) => {

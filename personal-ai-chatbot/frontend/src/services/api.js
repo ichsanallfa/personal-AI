@@ -13,9 +13,6 @@ apiClient.interceptors.request.use((reqConfig) => {
   const token = localStorage.getItem("lucy_auth_token");
   if (token) {
     reqConfig.headers["Authorization"] = `Bearer ${token}`;
-  } else {
-    const storedUserId = localStorage.getItem("lucy_user_id") || "web_user";
-    reqConfig.headers["x-user-id"] = storedUserId;
   }
   return reqConfig;
 });

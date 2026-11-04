@@ -200,6 +200,30 @@ class MemoryService {
     return newItem;
   }
 
+  updateUserMemoryItem(userId, memoryId, updates = {}) {
+    this.initialize();
+    const userMem = this.getUserMemory(userId);
+    const item = userMem.items.find((entry) => entry.id === memoryId);
+    if (!item) return null;
+
+    const content = typeof updates.content === "string" ? updates.content.trim() : item.content;
+    if (content.length < 5 || content.length > 500) return null;
+    const category = Object.values(MEMORY_CATEGORIES).includes(updates.category)
+      ? updates.category
+      : item.category;
+    const importance = Number.isInteger(updates.importance)
+      ? Math.min(5, Math.max(1, updates.importance))
+      : item.importance;
+
+    const updated = { ...item, content, category, importance, updatedAt: Date.now() };
+    const items = userMem.items.map((entry) => entry.id === memoryId ? updated : entry);
+    const allData = loadJsonFile(USER_MEMORY_FILE, { users: {} });
+    allData.users ||= {};
+    allData.users[userId] = { items, updatedAt: Date.now() };
+    saveJsonFile(USER_MEMORY_FILE, allData);
+    return updated;
+  }
+
   deleteUserMemoryItem(userId, memoryId) {
     this.initialize();
     const userMem = this.getUserMemory(userId);
@@ -254,6 +278,28 @@ class MemoryService {
     return validItems;
   }
 
+  applyMemoryActions(userId, actions = []) {
+    const results = [];
+    for (const action of actions) {
+      if (!action || typeof action !== "object") continue;
+      if (action.type === "add" && typeof action.content === "string") {
+        const item = this.addUserMemoryItem(userId, action.content, action.category, action.importance);
+        results.push({ type: "add", success: Boolean(item), id: item?.id || null });
+      } else if (action.type === "update" && typeof action.id === "string") {
+        const item = this.updateUserMemoryItem(userId, action.id, action);
+        results.push({ type: "update", success: Boolean(item), id: action.id });
+      } else if (action.type === "delete" && typeof action.id === "string") {
+        const before = this.getUserMemory(userId).items.length;
+        const after = this.deleteUserMemoryItem(userId, action.id).length;
+        results.push({ type: "delete", success: after < before, id: action.id });
+      } else if (action.type === "forget_temporary") {
+        saveJsonFile(getTempMemoryFilePath(userId), []);
+        results.push({ type: action.type, success: true });
+      }
+    }
+    return results;
+  }
+
   // ==========================================
   // PROCESS CHAT MESSAGE FOR MEMORY EXTRACTION
   // ==========================================
@@ -276,6 +322,71 @@ class MemoryService {
       tempMemory,
       item: this.addUserMemoryItem(userId, message, classification.category, classification.importance),
     };
+  }
+
+  async decideMemory({ userId, userRole, message, aiProvider = null }) {
+    const classification = classifyMemoryCandidate(message);
+
+    if (!aiProvider || aiProvider.name === "mock" || !aiProvider.isAvailable?.()) {
+      return { actions: [classification.type === "core"
+        ? { type: "long_term", content: message.trim(), category: classification.category, importance: classification.importance }
+        : { type: "temporary" }] };
+    }
+
+    const currentMemories = this.getUserMemory(userId).items.map(({ id, content, category, importance }) => ({ id, content, category, importance }));
+    const prompt = `Kamu mengelola memori AI pribadi Lucy untuk user ini. Pilih simpanan dan perubahan memori berdasarkan manfaat jangka panjang. Balas HANYA JSON valid.
+  Aturan:
+  - Tindakan yang tersedia: ignore, temporary, long_term, update, delete, forget_temporary.
+  - Gunakan long_term untuk fakta stabil yang membantu personalisasi; simpan ringkas, bukan seluruh percakapan.
+  - Gunakan update untuk mengoreksi/menggabungkan memori lama yang berubah. Gunakan delete jika fakta sudah salah/usang atau user meminta lupa.
+  - Gunakan forget_temporary hanya jika konteks sementara sudah tidak berguna.
+  - Jangan menyimpan password, token, rahasia, atau data sensitif.
+  - Jangan pernah mengubah Core Memory/persona, file, database, atau memori milik user lain. Izin hanya untuk memori milik user ini.
+  - Jangan membuat perubahan destruktif hanya karena dugaan; fakta baru bertentangan harus update fakta lama, bukan menghapus tanpa alasan.
+  - Kategori: preference, personal_info, work, schedule, general. Importance: integer 1-5.
+  Format: {"actions":[{"type":"ignore|temporary|long_term|update|delete|forget_temporary","id":"existing-id-for-update-or-delete","content":"","category":"general","importance":3}]}
+  Memori milik user saat ini: ${JSON.stringify(currentMemories)}
+  Pesan user terbaru: ${JSON.stringify(message)}`;
+
+    try {
+      const raw = await aiProvider.generateCompletion({
+        systemPrompt: prompt,
+        messages: [{ role: "user", content: "Pilih memori sekarang." }],
+      });
+      const decision = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || "{}");
+      const allowedActions = new Set(["ignore", "temporary", "long_term", "update", "delete", "forget_temporary"]);
+      const allowedCategories = new Set(Object.values(MEMORY_CATEGORIES));
+      if (!Array.isArray(decision.actions) || decision.actions.length > 5) throw new Error("Invalid memory actions");
+      const existingIds = new Set(currentMemories.map((item) => item.id));
+      const actions = decision.actions.filter((action) => {
+        if (!allowedActions.has(action.type)) return false;
+        if (["update", "delete"].includes(action.type) && !existingIds.has(action.id)) return false;
+        if (["long_term", "update"].includes(action.type) &&
+            (typeof action.content !== "string" || action.content.trim().length < 5 || action.content.length > 500)) return false;
+        return true;
+      }).map((action) => ({
+        ...action,
+        category: allowedCategories.has(action.category) ? action.category : MEMORY_CATEGORIES.GENERAL,
+        importance: Math.min(5, Math.max(1, Number(action.importance) || 3)),
+      }));
+
+      return { actions: actions.length ? actions : [{ type: "ignore" }] };
+    } catch (error) {
+      logger.warn(`AI memory decision failed, using local classifier: ${error.message}`);
+      return { actions: [classification.type === "core"
+        ? { type: "long_term", content: message.trim(), category: classification.category, importance: classification.importance }
+        : { type: "temporary" }] };
+    }
+  }
+
+  async processChatMessageWithAI({ userId, userRole, message, aiProvider = null }) {
+    const decision = await this.decideMemory({ userId, userRole, message, aiProvider });
+    const actions = decision.actions || [];
+    const hasTemporary = actions.some((action) => action.type === "temporary");
+    const results = this.applyMemoryActions(userId, actions);
+    const tempMemory = hasTemporary ? this.addTemporaryMemory(userId, message) : this.getTemporaryMemory(userId);
+
+    return { tempMemory, item: results.find((result) => result.type === "long_term" || result.type === "add") || null, decision, results };
   }
 }
 

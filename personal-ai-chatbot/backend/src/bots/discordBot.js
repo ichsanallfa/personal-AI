@@ -5,6 +5,7 @@ import { isAllowedUser, isOwnerUser } from "./discordAccess.js";
 import { reminderService } from "../services/reminder/reminderService.js";
 import { extractReminderDetails, parseReminderTime } from "../services/reminder/reminderParser.js";
 import { logger } from "../utils/logger.js";
+import { removeStageDirections } from "../services/ai/responseText.js";
 
 let botEnabled = true;
 const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages, GatewayIntentBits.DirectMessages, GatewayIntentBits.MessageContent], partials: [Partials.Channel] });
@@ -12,6 +13,7 @@ const sendReply = async (message, text) => { try { await message.reply(text); re
 client.on("clientReady", () => logger.info(`Discord bot logged in as ${client.user.tag}`));
 client.on("messageCreate", async (message) => {
 	if (message.author.bot) return;
+	logger.info(`Discord message from ${message.author.tag} (${message.author.id}): "${message.content?.slice(0, 80) || "[empty]"}"`);
 	const userId = message.author.id;
 	const content = message.content || "";
 	const lower = content.toLowerCase();
@@ -22,7 +24,17 @@ client.on("messageCreate", async (message) => {
 	const details = extractReminderDetails(content);
 	if (details.isReminderRequest && details.needsTime) return sendReply(message, 'Contoh: "ingatkan saya jam 22:00 belajar".');
 	if (details.timeText) { const scheduledAt = parseReminderTime(details.timeText); if (!scheduledAt) return sendReply(message, "Format waktu tidak dikenali."); const reminderMessage = details.reminderMessage || "Reminder dari Lucy"; reminderService.createReminder({ userId, platform: "discord", platformUserId: userId, message: reminderMessage, scheduledAt }); return sendReply(message, `Siap. Pesan: "${reminderMessage}"`); }
-	try { await message.channel.sendTyping(); const response = await axios.post(config.backendUrl, { message: content }, { headers: { "x-service-key": config.serviceApiKey, "x-user-id": userId, "x-platform": "discord" } }); return sendReply(message, response.data.data?.reply || response.data.reply || "Maaf, ada kendala respon."); } catch (error) { console.error("Discord bot backend error:", error.response?.data || error.message); return sendReply(message, "Error communicating dengan Lucy AI."); }
+	try {
+		await message.channel.sendTyping();
+		const response = await axios.post(config.backendUrl, { message: content }, { headers: { "x-service-key": config.serviceApiKey, "x-user-id": userId, "x-platform": "discord" } });
+		const reply = removeStageDirections(response.data.data?.reply || response.data.reply || "Maaf, ada kendala respon.");
+		if (isOwnerUser(userId)) {
+			await axios.post(config.backendUrl.replace(/\/api\/chat\/?$/, "/api/proactive/activity"), {}, {
+				headers: { "x-service-key": config.serviceApiKey, "x-user-id": userId, "x-platform": "discord" },
+			});
+		}
+		return sendReply(message, reply);
+	} catch (error) { console.error("Discord bot backend error:", error.response?.data || error.message); return sendReply(message, "Error communicating dengan Lucy AI."); }
 });
 export const startDiscordBot = async () => { if (!config.discordBotToken) return false; await client.login(config.discordBotToken); return true; };
 export const stopDiscordBot = async () => { await client.destroy(); };

@@ -5,6 +5,12 @@ import { ROLES } from "../../config/constants.js";
 import { identityService } from "./identityService.js";
 import { UnauthorizedError } from "../../utils/appError.js";
 
+const constantTimeEqual = (left, right) => {
+  const leftBuffer = Buffer.from(String(left || ""));
+  const rightBuffer = Buffer.from(String(right || ""));
+  return leftBuffer.length === rightBuffer.length && crypto.timingSafeEqual(leftBuffer, rightBuffer);
+};
+
 class AuthService {
   /**
    * Generates a signed JWT token
@@ -65,7 +71,7 @@ class AuthService {
    * Authenticate owner using Owner Secret Key / Password
    */
   authenticateOwner(secretKey) {
-    if (!secretKey || secretKey !== config.ownerSecretKey) {
+    if (!constantTimeEqual(secretKey, config.ownerSecretKey)) {
       throw new UnauthorizedError("Invalid owner credentials");
     }
 
@@ -117,7 +123,7 @@ class AuthService {
    * Authenticates Bot-to-Backend Service request (preventing header spoofing)
    */
   authenticateBotRequest(serviceKey, platform, platformUserId) {
-    if (!serviceKey || serviceKey !== config.serviceApiKey) {
+    if (!constantTimeEqual(serviceKey, config.serviceApiKey)) {
       throw new UnauthorizedError("Invalid service API key for bot gateway");
     }
 

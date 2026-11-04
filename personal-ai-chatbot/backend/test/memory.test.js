@@ -49,3 +49,62 @@ test("Memory Service: Core memory management", () => {
   assert.ok(Array.isArray(core.facts));
   assert.ok(Array.isArray(core.rules));
 });
+
+test("Memory Service: AI decision stores durable facts and keeps casual chat temporary", async () => {
+  const testUser = `test_ai_memory_${Date.now()}`;
+  const provider = {
+    name: "test",
+    isAvailable: () => true,
+    generateCompletion: async () => JSON.stringify({
+      action: "long_term",
+      content: "User bekerja sebagai software engineer.",
+      category: "work",
+      importance: 4,
+    }),
+  };
+
+  const saved = await memoryService.processChatMessageWithAI({
+    userId: testUser,
+    userRole: "user",
+    message: "Aku kerja sebagai software engineer di perusahaan game.",
+    aiProvider: provider,
+  });
+  assert.equal(saved.decision.actions[0].type, "long_term");
+  assert.equal(saved.results[0].success, true);
+  const savedItem = memoryService.getUserMemory(testUser).items[0];
+  assert.equal(savedItem.content, "User bekerja sebagai software engineer.");
+  assert.equal(savedItem.category, MEMORY_CATEGORIES.WORK);
+
+  provider.generateCompletion = async () => JSON.stringify({ action: "temporary" });
+  const casual = await memoryService.processChatMessageWithAI({
+    userId: testUser,
+    userRole: "user",
+    message: "Wkwk itu lucu banget.",
+    aiProvider: provider,
+  });
+  assert.equal(casual.results.length, 0);
+  assert.equal(memoryService.getUserMemory(testUser).items.length, 1);
+});
+
+test("Memory Service: AI can update or delete only existing user memory IDs", async () => {
+  const testUser = `test_ai_memory_edit_${Date.now()}`;
+  const original = memoryService.addUserMemoryItem(testUser, "User tinggal di Bandung.", MEMORY_CATEGORIES.PERSONAL_INFO, 4);
+  const provider = {
+    name: "test",
+    isAvailable: () => true,
+    generateCompletion: async () => JSON.stringify({ actions: [
+      { type: "update", id: original.id, content: "User tinggal di Yogyakarta.", category: "personal_info", importance: 4 },
+      { type: "delete", id: "not-owned-or-missing" },
+    ] }),
+  };
+
+  const result = await memoryService.processChatMessageWithAI({
+    userId: testUser,
+    userRole: "user",
+    message: "Aku sudah pindah ke Yogyakarta.",
+    aiProvider: provider,
+  });
+  assert.equal(result.results[0].success, true);
+  assert.equal(result.results.length, 1, "Unknown IDs must be rejected");
+  assert.equal(memoryService.getUserMemory(testUser).items[0].content, "User tinggal di Yogyakarta.");
+});
