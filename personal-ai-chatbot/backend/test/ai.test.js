@@ -54,6 +54,113 @@ test("AI Service: Generates mock / fallback response gracefully", async () => {
   assert.equal(res.mode, "mock");
 });
 
+test("AI Service: Keeps chat on model when memory-selection call fails", async () => {
+  const original = aiService.providers.openrouter;
+  aiService.providers.test = {
+    name: "test",
+    isAvailable: () => true,
+    generateCompletion: async ({ systemPrompt }) => {
+      if (systemPrompt.includes("Kamu mengelola memori AI pribadi")) {
+        throw new Error("memory selection unavailable");
+      }
+      return "Kita sedang chat lewat Discord.";
+    },
+  };
+  try {
+    const res = await aiService.generateReply({
+      userId: `test_context_${Date.now()}`,
+      userRole: ROLES.OWNER,
+      message: "contoh skrng kita berbicara diman",
+      preferredProvider: "test",
+      chatHistory: [],
+    });
+    assert.equal(res.mode, "test");
+    assert.equal(res.reply, "Kita sedang chat lewat Discord.");
+  } finally {
+    aiService.providers.openrouter = original;
+    delete aiService.providers.test;
+  }
+});
+
+test("AI Service: Retries quota errors with smaller cap and avoids fallback for other errors", async () => {
+  const calls = [];
+  aiService.providers.test = {
+    name: "test",
+    isAvailable: () => true,
+    generateCompletion: async (options) => {
+      if (options.systemPrompt.includes("Kamu mengelola memori AI pribadi")) {
+        throw new Error("memory unavailable");
+      }
+      calls.push(options.maxTokens);
+      if (options.maxTokens === 700) {
+        const error = new Error("requires more credits");
+        error.response = { status: 402, data: { error: { message: "requires more credits" } } };
+        throw error;
+      }
+      return "Fiturku termasuk chat AI dan Discord.";
+    },
+  };
+  try {
+    const res = await aiService.generateReply({
+      userId: `test_quota_${Date.now()}`,
+      userRole: ROLES.OWNER,
+      message: "fitur kamu apa saja",
+      preferredProvider: "test",
+    });
+    assert.equal(res.mode, "test");
+    assert.deepEqual(calls, [700, 350]);
+
+    aiService.providers.test.generateCompletion = async () => {
+      throw new Error("network timeout");
+    };
+    await assert.rejects(
+      aiService.generateReply({
+        userId: `test_network_${Date.now()}`,
+        userRole: ROLES.OWNER,
+        message: "fitur kamu apa saja",
+        preferredProvider: "test",
+      }),
+      /network timeout/,
+    );
+  } finally {
+    delete aiService.providers.test;
+  }
+});
+
+test("Fallback responder answers edit-permission follow-up directly", () => {
+  const reply = buildFallbackReply("ouwh jadi edit lom bisa ya kalau akses bisa?");
+  assert.match(reply, /Bisa/i);
+  assert.match(reply, /mengubah memori/i);
+  assert.doesNotMatch(reply, /Ada yang bisa kubantu/i);
+});
+
+test("Fallback responder recognizes Discord context correction", () => {
+  const reply = buildFallbackReply("discord kan sudah apakah kamu lupa?");
+  assert.match(reply, /sedang chat lewat Discord/i);
+  assert.doesNotMatch(reply, /Saya Lucy/i);
+});
+
+test("Fallback responder answers where-we-are question", () => {
+  const reply = buildFallbackReply("contoh skrng kita berbicara diman");
+  assert.match(reply, /sedang chat lewat Discord/i);
+  assert.doesNotMatch(reply, /Saya Lucy, asisten pribadi kamu/i);
+});
+
+test("Fallback responder tolerates common typos in intent words", () => {
+  assert.match(buildFallbackReply("kita lg ngobrol dmn sih"), /chat lewat Discord/i);
+  assert.match(buildFallbackReply("kmu tau nam ak siapa"), /Lucy/i);
+  assert.match(buildFallbackReply("aku blm nangkep nih"), /belum menangkap maksudmu/i);
+  assert.match(buildFallbackReply("kalau fitur kamu ad ap aja"), /Fiturku:/i);
+});
+
+test("Fallback responder answers edit access questions directly", () => {
+  const reply = buildFallbackReply("ouwh jadi edit lom bisa ya kalau akses bisa?");
+  assert.match(reply, /Bisa/i);
+  assert.match(reply, /mengubah memori yang diizinkan/i);
+  assert.match(reply, /tidak punya akses bebas/i);
+  assert.doesNotMatch(reply, /Ada yang bisa kubantu lagi/i);
+});
+
 test("AI response cleanup removes starred stage directions but keeps keyboard emoticons", () => {
   assert.equal(removeStageDirections("Halo *tertawa kecil* Alfaa! >-<"), "Halo Alfaa! >-<");
   assert.equal(removeStageDirections("*tersenyum* Halo, Alfaa!"), "Halo, Alfaa!");

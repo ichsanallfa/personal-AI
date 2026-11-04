@@ -1,4 +1,7 @@
 import { config } from "../../config/env.js";
+import { BACKEND_ROOT } from "../../config/paths.js";
+import fs from "fs";
+import path from "path";
 import { memoryService } from "../memory/memoryService.js";
 import { chatHistoryService } from "../memory/chatHistoryService.js";
 import { reminderDispatcher } from "../reminder/reminderDispatcher.js";
@@ -132,6 +135,48 @@ export class ProactiveThoughtService {
     this.lastInitialMode = null;
     this.lastProactiveMessage = null;
     this.lastProactiveAt = 0;
+    this.recentProactiveFile = path.join(BACKEND_ROOT, "data", "proactiveHistory.json");
+    try {
+      this.recentProactiveMessages = process.env.NODE_ENV === "test"
+        ? []
+        : JSON.parse(fs.readFileSync(this.recentProactiveFile, "utf8")).messages || [];
+    } catch {
+      this.recentProactiveMessages = [];
+    }
+    this.maxRecentProactiveMessages = 30;
+  }
+
+  rememberProactiveText(text) {
+    this.recentProactiveMessages.push(text);
+    this.recentProactiveMessages = this.recentProactiveMessages.slice(-this.maxRecentProactiveMessages);
+    if (process.env.NODE_ENV === "test") return;
+    try {
+      fs.mkdirSync(path.dirname(this.recentProactiveFile), { recursive: true });
+      fs.writeFileSync(this.recentProactiveFile, JSON.stringify({ messages: this.recentProactiveMessages }, null, 2));
+    } catch (error) {
+      logger.warn(`Failed to persist proactive history: ${error.message}`);
+    }
+  }
+
+  normalizeProactiveText(text) {
+    return text.toLocaleLowerCase("id-ID")
+      .replace(/[^\p{L}\p{N}\s]/gu, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  isRecentDuplicate(candidate) {
+    const normalized = this.normalizeProactiveText(candidate);
+    if (!normalized) return true;
+    return this.recentProactiveMessages.some((recent) => {
+      const previous = this.normalizeProactiveText(recent);
+      if (normalized === previous || normalized.includes(previous) || previous.includes(normalized)) return true;
+      const words = new Set(normalized.split(" ").filter((word) => word.length > 2));
+      const previousWords = new Set(previous.split(" ").filter((word) => word.length > 2));
+      if (!words.size || !previousWords.size) return false;
+      const overlap = [...words].filter((word) => previousWords.has(word)).length;
+      return overlap / Math.min(words.size, previousWords.size) >= 0.8;
+    });
   }
 
   getRandomCooldown() {
@@ -284,28 +329,33 @@ Keluarkan HANYA 1 kalimat spontan dalam bahasa Indonesia yang sesuai kondisi (ma
     }
 
     const userMemory = memoryService.getUserMemory(this.targetUserId);
-    const prompt = this.generateThoughtPrompt(userMemory.items || [], chosenMode);
+    const recentMessages = this.recentProactiveMessages.slice(-10);
+    const prompt = `${this.generateThoughtPrompt(userMemory.items || [], chosenMode)}\n\nJANGAN ULANGI atau parafrase pesan proaktif sebelumnya. Pesan terakhir: ${JSON.stringify(recentMessages)}`;
 
     const resolvedProvider = aiProvider || (aiService?.getProvider ? aiService.getProvider() : null);
 
     if (resolvedProvider && resolvedProvider.name !== "mock" && resolvedProvider.isAvailable && resolvedProvider.isAvailable()) {
       try {
-        const reply = await resolvedProvider.generateCompletion({
-          systemPrompt: prompt,
-          messages: [{ role: "user", content: "Keluarkan TEPAT 1 kalimat spontan sekarang ke Alfaa." }],
-          temperature: 0.95,
-        });
-        if (reply && reply.trim()) {
-          return reply.trim().replace(/^["']|["']$/g, "");
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          const reply = await resolvedProvider.generateCompletion({
+            systemPrompt: prompt,
+            messages: [{ role: "user", content: attempt === 0
+              ? "Keluarkan TEPAT 1 kalimat spontan yang belum pernah kamu kirim ke Alfaa."
+              : "Hasil sebelumnya terlalu mirip dengan pesan lama. Buat pemikiran baru dengan topik berbeda, tepat 1 kalimat." }],
+            temperature: 0.95,
+          });
+          const candidate = reply?.trim().replace(/^["']|["']$/g, "");
+          if (candidate && !this.isRecentDuplicate(candidate)) return candidate;
         }
       } catch (err) {
         logger.warn(`Proactive LLM generation failed, using curated fallback: ${err.message}`);
       }
     }
 
-    // Curated random selection for current stage/mode
-    const randomIndex = Math.floor(Math.random() * templates.length);
-    return templates[randomIndex];
+    // Fallback templates are also filtered; return null rather than repeat stale text.
+    const freshTemplates = templates.filter((text) => !this.isRecentDuplicate(text));
+    if (!freshTemplates.length) return null;
+    return freshTemplates[Math.floor(Math.random() * freshTemplates.length)];
   }
 
   async triggerSpontaneousThought({ force = false, aiProvider = null, platform = null } = {}) {
@@ -314,12 +364,15 @@ Keluarkan HANYA 1 kalimat spontan dalam bahasa Indonesia yang sesuai kondisi (ma
     }
 
     const currentStage = this.unrespondedPings;
-    const thoughtText = removeStageDirections(await this.generateSpontaneousText(aiProvider));
+    const generatedText = await this.generateSpontaneousText(aiProvider);
+    if (!generatedText) return { triggered: false, reason: "No unique proactive message available" };
+    const thoughtText = removeStageDirections(generatedText);
 
     this.lastSpokenAt = Date.now();
     this.unrespondedPings += 1;
     this.lastProactiveMessage = thoughtText;
     this.lastProactiveAt = Date.now();
+    this.rememberProactiveText(thoughtText);
     this.currentCooldownMs = this.getRandomCooldown();
 
     // 1. Record in Lucy's chat history for owner

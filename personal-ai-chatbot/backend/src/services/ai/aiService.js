@@ -115,14 +115,19 @@ ${roleInstructions}
     proactiveContext = null,
   }) {
     const activeProvider = this.getProvider(preferredProvider || config.aiProvider);
-
-    // 1. AI decides whether message belongs in temporary or long-term memory.
-    const { tempMemory } = await memoryService.processChatMessageWithAI({
-      userId,
-      userRole,
-      message,
-      aiProvider: activeProvider,
-    });
+    let tempMemory;
+    try {
+      // Memory selection must not consume the only model call before answering the user.
+      ({ tempMemory } = await memoryService.processChatMessageWithAI({
+        userId,
+        userRole,
+        message,
+        aiProvider: activeProvider,
+      }));
+    } catch (error) {
+      logger.warn(`AI memory selection failed; using temporary context: ${error.message}`);
+      tempMemory = memoryService.addTemporaryMemory(userId, message);
+    }
 
     // 2. Fetch up-to-date memory context
     const coreMemory = memoryService.getCoreMemory();
@@ -148,6 +153,10 @@ ${roleInstructions}
       ? `\n\n[EMOSI USER: ${emotionData.emotion} (Intensitas: ${Math.round(emotionData.intensity * 100)}%)]`
       : "";
 
+    const recentContext = chatHistory.length
+      ? `\n\n[KONTEKS WAJIB]: Balas pesan terbaru sebagai lanjutan percakapan di bawah. Pertanyaan singkat seperti "bisa?", "yang mana?", atau "edit juga?" merujuk ke topik terakhir yang dibahas. Jangan ulangi perkenalan jika sudah pernah menyapa. Kalau maksud user ambigu, tanyakan klarifikasi singkat daripada mengganti topik.\nPesan terbaru sebelumnya: ${JSON.stringify(chatHistory.slice(-6).map(({ role, content }) => ({ role, content })))}`
+      : "\n\n[KONTEKS WAJIB]: Jawab langsung sesuai pesan user. Hindari sapaan generik yang tidak menjawab pertanyaannya.";
+
     const proactiveSection = proactiveContext?.wasLastProactive && proactiveContext?.text
       ? `\n\n[PENTING - KONTEKS OBROLAN PROAKTIF]:
 Pesan terakhir yang kamu katakan kepada user sebelum ini adalah pesan proaktif/spontan dari kamu:
@@ -171,10 +180,19 @@ ATURAN WAJIB:
       }
       formattedMessages.push({ role: "user", content: message });
 
-      const generatedReply = await activeProvider.generateCompletion({
-        systemPrompt: systemPrompt + emotionContext + proactiveSection,
+      const completionOptions = {
+        systemPrompt: systemPrompt + emotionContext + recentContext + proactiveSection,
         messages: formattedMessages,
-      });
+        maxTokens: 700,
+      };
+      let generatedReply;
+      try {
+        generatedReply = await activeProvider.generateCompletion(completionOptions);
+      } catch (error) {
+        if (!this.isQuotaOrCreditError(error)) throw error;
+        logger.warn(`Provider ${activeProvider.name} quota/credit error; retrying with smaller token cap: ${error.message}`);
+        generatedReply = await activeProvider.generateCompletion({ ...completionOptions, maxTokens: 350 });
+      }
       const reply = removeStageDirections(generatedReply);
 
       return {
@@ -183,7 +201,11 @@ ATURAN WAJIB:
         emotion: emotionData.emotion,
       };
     } catch (error) {
-      logger.warn(`Provider ${activeProvider.name} failed, falling back to heuristic responder: ${error.message}`);
+      if (!this.isQuotaOrCreditError(error)) {
+        logger.error(`Provider ${activeProvider.name} request failed; not using heuristic fallback: ${error.message}`);
+        throw error;
+      }
+      logger.warn(`Provider ${activeProvider.name} quota/credit exhausted; using contextual fallback: ${error.message}`);
       const memoryFacts = userMemory.items.map((i) => i.content);
       const fallback = removeStageDirections(buildFallbackReply(message, memoryFacts));
 
@@ -193,6 +215,12 @@ ATURAN WAJIB:
         emotion: emotionData.emotion,
       };
     }
+  }
+
+  isQuotaOrCreditError(error) {
+    const status = error.response?.status;
+    const details = JSON.stringify(error.response?.data || error.message || "").toLowerCase();
+    return status === 402 || /insufficient[_ ]credits|not enough credits|requires more credits|quota exceeded|billing limit|credit balance/.test(details);
   }
 }
 

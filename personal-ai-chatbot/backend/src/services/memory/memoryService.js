@@ -162,6 +162,7 @@ class MemoryService {
     this.initialize();
     const normalizedContent = content.trim();
     if (normalizedContent.length < 5) return null;
+    if (this.hasSensitiveContent(normalizedContent)) return null;
 
     const userMem = this.getUserMemory(userId);
     const existing = userMem.items;
@@ -208,6 +209,7 @@ class MemoryService {
 
     const content = typeof updates.content === "string" ? updates.content.trim() : item.content;
     if (content.length < 5 || content.length > 500) return null;
+    if (this.hasSensitiveContent(content)) return null;
     const category = Object.values(MEMORY_CATEGORIES).includes(updates.category)
       ? updates.category
       : item.category;
@@ -361,6 +363,7 @@ class MemoryService {
       const actions = decision.actions.filter((action) => {
         if (!allowedActions.has(action.type)) return false;
         if (["update", "delete"].includes(action.type) && !existingIds.has(action.id)) return false;
+        if (["long_term", "update"].includes(action.type) && this.hasSensitiveContent(action.content || "")) return false;
         if (["long_term", "update"].includes(action.type) &&
             (typeof action.content !== "string" || action.content.trim().length < 5 || action.content.length > 500)) return false;
         return true;
@@ -370,7 +373,10 @@ class MemoryService {
         importance: Math.min(5, Math.max(1, Number(action.importance) || 3)),
       }));
 
-      return { actions: actions.length ? actions : [{ type: "ignore" }] };
+      return {
+        actions: actions.length ? actions : [{ type: "ignore" }],
+        item: actions.find((action) => action.type === "long_term") || null,
+      };
     } catch (error) {
       logger.warn(`AI memory decision failed, using local classifier: ${error.message}`);
       return { actions: [classification.type === "core"
@@ -383,10 +389,18 @@ class MemoryService {
     const decision = await this.decideMemory({ userId, userRole, message, aiProvider });
     const actions = decision.actions || [];
     const hasTemporary = actions.some((action) => action.type === "temporary");
-    const results = this.applyMemoryActions(userId, actions);
+    const mutationResults = this.applyMemoryActions(userId, actions);
     const tempMemory = hasTemporary ? this.addTemporaryMemory(userId, message) : this.getTemporaryMemory(userId);
+    const legacyItem = decision.item
+      ? this.addUserMemoryItem(userId, decision.item.content, decision.item.category, decision.item.importance)
+      : null;
+    const results = [...mutationResults, ...(legacyItem ? [{ type: "long_term", success: true, id: legacyItem.id }] : [])];
 
-    return { tempMemory, item: results.find((result) => result.type === "long_term" || result.type === "add") || null, decision, results };
+    return { tempMemory, item: legacyItem, decision, results };
+  }
+
+  hasSensitiveContent(text) {
+    return /\b(password|passphrase|api[_ -]?key|token|secret|kata sandi|kata laluan|kunci rahasia)\b/i.test(text);
   }
 }
 

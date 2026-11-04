@@ -12,13 +12,14 @@ export class OpenRouterProvider extends BaseAIProvider {
     return Boolean(config.openRouterApiKey);
   }
 
-  async generateCompletion({ systemPrompt, messages, model = config.aiModel }) {
+  async generateCompletion({ systemPrompt, messages, model = config.aiModel, maxTokens = 700 }) {
     if (!this.isAvailable()) {
       throw new Error("OpenRouter API key is not configured");
     }
 
     const payload = {
       model,
+      max_tokens: maxTokens,
       messages: [
         { role: "system", content: systemPrompt },
         ...messages,
@@ -36,11 +37,13 @@ export class OpenRouterProvider extends BaseAIProvider {
         timeout: 30000,
       });
 
-      const reply = response.data?.choices?.[0]?.message?.content;
-      if (!reply) {
-        throw new Error("Empty response returned by OpenRouter");
+      const choice = response.data?.choices?.[0];
+      const reply = choice?.message?.content;
+      if (typeof reply !== "string" || !reply.trim()) {
+        const reason = choice?.finish_reason || response.data?.error?.message || "no text content returned";
+        throw new Error(`OpenRouter returned no text for model ${model}: ${reason}`);
       }
-      return reply;
+      return reply.trim();
     } catch (error) {
       logger.error("OpenRouter provider error:", error.response?.data || error.message);
       throw error;

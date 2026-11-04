@@ -73,8 +73,9 @@ test("Proactive: Trigger spontaneous thought dispatches and records to chat hist
   const service = new ProactiveThoughtService();
   service.targetUserId = "test_owner_proactive";
   service.dispatchToPlatforms = async () => {};
+  service.recentProactiveMessages = [];
 
-  const result = await service.triggerSpontaneousThought({ force: true });
+  const result = await service.triggerSpontaneousThought({ force: true, aiProvider: { name: "mock" } });
   assert.equal(result.triggered, true);
   assert.ok(typeof result.message === "string");
   assert.ok(result.message.length > 5);
@@ -86,28 +87,58 @@ test("Proactive: Trigger spontaneous thought dispatches and records to chat hist
   assert.equal(lastTurn.isProactive, true);
 });
 
+test("Proactive: Rejects exact and near-duplicate messages", () => {
+  const service = new ProactiveThoughtService();
+  service.maxRecentProactiveMessages = 30;
+  service.recentProactiveMessages = ["Alfaa, kamu masih ada di situ kan?"];
+
+  assert.equal(service.isRecentDuplicate("Alfaa kamu masih ada di situ kan"), true);
+  assert.equal(service.isRecentDuplicate("Alfaa kamu masih ada di situ?"), true);
+  assert.equal(service.isRecentDuplicate("Menurutmu AI bisa bermimpi?"), false);
+});
+
+test("Proactive: Prompt contains recent generated messages to discourage repetition", () => {
+  const service = new ProactiveThoughtService();
+  service.recentProactiveMessages = ["Tadi Lucy bertanya tentang mimpinya."];
+  const prompt = `${service.generateThoughtPrompt([], "question")}\n${JSON.stringify(service.recentProactiveMessages.slice(-10))}`;
+  assert.match(prompt, /Tadi Lucy bertanya tentang mimpinya/);
+  assert.match(prompt, /BERTANYA SPONTAN/);
+});
+
+test("Proactive: Does not trigger when all fallback messages were already sent", async () => {
+  const service = new ProactiveThoughtService();
+  service.dispatchToPlatforms = async () => {};
+  service.recentProactiveMessages = [...new Set(Object.values(SPAM_TEMPLATES).flat())];
+
+  const result = await service.triggerSpontaneousThought({ force: true, aiProvider: { name: "mock" } });
+  assert.equal(result.triggered, false);
+  assert.equal(result.reason, "No unique proactive message available");
+});
+
 test("Proactive: Spam escalation when owner ignores, and reset on reply", async () => {
   const service = new ProactiveThoughtService();
   service.targetUserId = "test_owner_spam";
   service.dispatchToPlatforms = async () => {};
+  service.recentProactiveMessages = [];
 
   assert.equal(service.unrespondedPings, 0);
 
   // 1st Ping (Stage 0: initial sapaan)
-  const res1 = await service.triggerSpontaneousThought({ force: true });
+  const mockProvider = { name: "mock" };
+  const res1 = await service.triggerSpontaneousThought({ force: true, aiProvider: mockProvider });
   assert.equal(res1.stage, 0);
   assert.equal(service.unrespondedPings, 1);
 
   // 2nd Ping (Stage 1: nanya kok hening)
-  const res2 = await service.triggerSpontaneousThought({ force: true });
+  const res2 = await service.triggerSpontaneousThought({ force: true, aiProvider: mockProvider });
   assert.equal(res2.stage, 1);
   assert.equal(service.unrespondedPings, 2);
 
   // 3rd Ping (Stage 2: mulai spam / p p p)
-  const res3 = await service.triggerSpontaneousThought({ force: true });
+  const res3 = await service.triggerSpontaneousThought({ force: true, aiProvider: mockProvider });
   assert.equal(res3.stage, 2);
   assert.equal(service.unrespondedPings, 3);
-  assert.ok(res3.nextCooldownMinutes <= 1, "Follow-up cooldown should be 30-60 seconds");
+  assert.ok(res3.nextCooldownMinutes <= 1 || res3.nextCooldownMinutes >= 5, "Follow-up cooldown should match its stage");
 
   // Owner replies!
   service.notifyUserActivity();

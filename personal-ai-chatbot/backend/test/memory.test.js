@@ -55,12 +55,14 @@ test("Memory Service: AI decision stores durable facts and keeps casual chat tem
   const provider = {
     name: "test",
     isAvailable: () => true,
-    generateCompletion: async () => JSON.stringify({
-      action: "long_term",
-      content: "User bekerja sebagai software engineer.",
-      category: "work",
-      importance: 4,
-    }),
+    generateCompletion: async ({ systemPrompt }) => JSON.stringify(systemPrompt.includes("Memori milik user saat ini")
+      ? { actions: [{
+          type: "long_term",
+          content: "User bekerja sebagai software engineer.",
+          category: "work",
+          importance: 4,
+        }] }
+      : { reply: "Dicatat." }),
   };
 
   const saved = await memoryService.processChatMessageWithAI({
@@ -70,12 +72,14 @@ test("Memory Service: AI decision stores durable facts and keeps casual chat tem
     aiProvider: provider,
   });
   assert.equal(saved.decision.actions[0].type, "long_term");
-  assert.equal(saved.results[0].success, true);
+  assert.equal(saved.item?.content, "User bekerja sebagai software engineer.");
   const savedItem = memoryService.getUserMemory(testUser).items[0];
   assert.equal(savedItem.content, "User bekerja sebagai software engineer.");
   assert.equal(savedItem.category, MEMORY_CATEGORIES.WORK);
 
-  provider.generateCompletion = async () => JSON.stringify({ action: "temporary" });
+  provider.generateCompletion = async ({ systemPrompt }) => JSON.stringify(systemPrompt.includes("Memori milik user saat ini")
+    ? { actions: [{ type: "temporary" }] }
+    : { reply: "Paham." });
   const casual = await memoryService.processChatMessageWithAI({
     userId: testUser,
     userRole: "user",
@@ -107,4 +111,10 @@ test("Memory Service: AI can update or delete only existing user memory IDs", as
   assert.equal(result.results[0].success, true);
   assert.equal(result.results.length, 1, "Unknown IDs must be rejected");
   assert.equal(memoryService.getUserMemory(testUser).items[0].content, "User tinggal di Yogyakarta.");
+});
+
+test("Memory Service: Rejects memory containing credential markers", () => {
+  const testUser = `test_secret_memory_${Date.now()}`;
+  assert.equal(memoryService.addUserMemoryItem(testUser, "API key: sk-example-secret", MEMORY_CATEGORIES.GENERAL, 5), null);
+  assert.equal(memoryService.getUserMemory(testUser).items.length, 0);
 });
