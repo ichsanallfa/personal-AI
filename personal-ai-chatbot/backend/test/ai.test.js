@@ -42,6 +42,71 @@ test("AI Service: Prompt Builder includes WIB time and owner context", () => {
   assert.match(prompt, /tanda bintang/i);
 });
 
+test("AI Service: Core facts are validated, deduplicated, and bounded", () => {
+  const facts = ["Fakta satu", "  ", 12, "Fakta satu", ...Array.from({ length: 25 }, (_, i) => `Fakta ${i + 2}`)];
+  const prompt = aiService.buildSystemPrompt({
+    identity: { name: "Core Lucy" },
+    personality: { style: "Tenang" },
+    rules: ["Rules tetap aktif"],
+    facts,
+  });
+
+  assert.match(prompt, /CORE MEMORY — IMPORTANT FACTS/);
+  assert.match(prompt, /1\. Fakta satu/);
+  assert.equal(prompt.match(/Fakta satu/g).length, 1);
+  assert.doesNotMatch(prompt, /(?:^|\n)\d+\. 12(?:\n|$)/);
+  assert.doesNotMatch(prompt, /(?:^|\n)\d+\.\s*$/m);
+  const factSection = prompt.split("CORE MEMORY — IMPORTANT FACTS\n")[1].split("\n\nTemporary memory")[0];
+  const listedFacts = [...factSection.matchAll(/^\d+\. (.+)$/gm)].map((match) => match[1]);
+  assert.deepEqual(listedFacts, ["Fakta satu", ...Array.from({ length: 19 }, (_, i) => `Fakta ${i + 2}`)]);
+  assert.equal(listedFacts.length, 20);
+  assert.match(prompt, /Core Lucy/);
+  assert.match(prompt, /Style: Tenang/);
+  assert.match(prompt, /Rules tetap aktif/);
+  assert.match(prompt, /Aturan sistem dan kebijakan keamanan tetap lebih tinggi/);
+});
+
+test("AI Service: Empty or unavailable core facts keep prompt construction safe", () => {
+  for (const coreMemory of [
+    { facts: [] },
+    { facts: ["", "   "] },
+    undefined,
+  ]) {
+    const prompt = aiService.buildSystemPrompt(coreMemory);
+    assert.match(prompt, /IDENTITAS KAMU/);
+    assert.match(prompt, /CORE MEMORY — IMPORTANT FACTS/);
+    assert.match(prompt, /Tidak ada fakta inti tambahan/);
+  }
+});
+
+test("AI Service: Updated core memory appears in subsequent generated response prompt", async () => {
+  const memoryService = await import("../src/services/memory/memoryService.js");
+  const originalGetCoreMemory = memoryService.memoryService.getCoreMemory;
+  let fact = "Lucy suka astronomi";
+  memoryService.memoryService.getCoreMemory = () => ({ facts: [fact] });
+  const provider = {
+    name: "core-fact-test",
+    isAvailable: () => true,
+    generateCompletion: async ({ systemPrompt }) => {
+      if (systemPrompt.includes("Kamu mengelola memori AI pribadi")) return '{"actions":[{"type":"ignore"}]}';
+      return systemPrompt;
+    },
+  };
+  aiService.providers[provider.name] = provider;
+
+  try {
+    const first = await aiService.generateReply({ message: "Halo", preferredProvider: provider.name });
+    assert.match(first.reply, /Lucy suka astronomi/);
+    fact = "Lucy tertarik pada biologi laut";
+    const second = await aiService.generateReply({ message: "Halo lagi", preferredProvider: provider.name });
+    assert.match(second.reply, /Lucy tertarik pada biologi laut/);
+    assert.doesNotMatch(second.reply, /Lucy suka astronomi/);
+  } finally {
+    memoryService.memoryService.getCoreMemory = originalGetCoreMemory;
+    delete aiService.providers[provider.name];
+  }
+});
+
 test("AI Service: Generates mock / fallback response gracefully", async () => {
   const res = await aiService.generateReply({
     userId: "test_ai_user",

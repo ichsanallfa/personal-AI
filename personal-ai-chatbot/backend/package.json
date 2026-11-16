@@ -5,7 +5,7 @@
   "main": "server.js",
   "type": "module",
   "scripts": {
-    "dev": "nodemon server.js",
+    "dev": "nodemon --ignore \"data/**\" --ignore \".runtime/**\" server.js",
     "start": "node server.js",
     "bot:discord": "node discordBot.js",
     "bot:telegram": "node telegramBot.js",

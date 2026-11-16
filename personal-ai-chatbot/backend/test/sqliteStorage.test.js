@@ -6,6 +6,7 @@ import fs from "fs";
 
 const dbDir = fs.mkdtempSync(path.join(os.tmpdir(), "lucy-db-"));
 process.env.RUNTIME_DIR = dbDir;
+process.env.SQLITE_DB_PATH = path.join(dbDir, "lucy.sqlite");
 
 const { readDocument, writeDocument, deleteDocument, closeDatabase } = await import("../src/storage/sqliteStorage.js");
 

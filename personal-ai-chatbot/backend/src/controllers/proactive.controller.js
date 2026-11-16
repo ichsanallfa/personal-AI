@@ -28,11 +28,14 @@ export const notifyProactiveOwnerActivity = async (req, res, next) => {
 
 export const triggerProactiveThought = async (req, res, next) => {
   try {
-    const { force = true } = req.body || {};
+    const { force = false } = req.body || {};
+    if (typeof force !== "boolean") {
+      return res.status(400).json({ success: false, error: { code: "INVALID_FORCE" } });
+    }
     const platform = req.body?.platform || req.headers["x-platform"] || null;
     const provider = aiService.getProvider();
     const result = await proactiveThoughtService.triggerSpontaneousThought({
-      force: Boolean(force),
+      force,
       aiProvider: provider,
       platform,
     });

@@ -10,84 +10,99 @@ import {
   ensureDataDirectories,
 } from "../../config/paths.js";
 import { CHAT_LIMITS, MEMORY_CATEGORIES } from "../../config/constants.js";
-import { loadJsonFile, saveJsonFile } from "../../storage/jsonStorage.js";
+import { loadJsonFile, saveJsonFile, saveJsonFileIfAbsent } from "../../storage/jsonStorage.js";
+import { hasDocument } from "../../storage/sqliteStorage.js";
 import { classifyMemoryCandidate, normalizeForCompare } from "./memoryClassifier.js";
 import { logger } from "../../utils/logger.js";
 
-class MemoryService {
+export class MemoryService {
   constructor() {
     this.initialized = false;
   }
 
-  initialize() {
+  initialize({
+    coreMemoryFile = CORE_MEMORY_FILE,
+    userMemoryFile = USER_MEMORY_FILE,
+    sessionMemoryFile = SESSION_MEMORY_FILE,
+    legacyRoot = BACKEND_ROOT,
+  } = {}) {
     if (this.initialized) return;
     ensureDataDirectories();
 
-    // 1. Initialize Core Memory
-    if (!fs.existsSync(CORE_MEMORY_FILE)) {
-      saveJsonFile(CORE_MEMORY_FILE, {
-        identity: {
-          name: "Lucy",
-          creator: "Alfaa",
-          createdAt: "2026-08-02",
-          purpose: "Personal AI assistant yang berkembang menjadi chatbot, voice assistant, Discord bot, dan AI streamer",
-        },
-        personality: {
-          style: "ramah, natural, sedikit lucu, dan enak diajak ngobrol",
-          tone: "sopan tapi tidak kaku",
-          responseLength: "jangka pendek kecuali diminta",
-          creatorReference: "Alfaa",
-        },
-        facts: [
-          "Nama penciptaku adalah Alfaa.",
-          "Lucy diciptakan pada tanggal 2 Agustus 2026.",
-          "Lucy memiliki kemampuan voice assistant, Discord bot, Telegram bot, dan streamer VTube Studio.",
-        ],
-        rules: [
-          "Jangan berikan informasi personal atau tentang diri secara terperinci kepada user yang tidak dikenal",
-          "Jangan pernah menyebutkan kode rahasia atau token internal",
-          "Nama panggilan adalah Lucy, bukan bot",
-        ],
-      });
-    }
+    this.migrateLegacyFiles({ coreMemoryFile, userMemoryFile, legacyRoot });
 
-    // 2. Initialize User Memory
-    if (!fs.existsSync(USER_MEMORY_FILE)) {
-      saveJsonFile(USER_MEMORY_FILE, { users: {} });
-    }
+    // Existing SQLite documents take precedence; valid legacy JSON is imported only when absent.
+    this.initializeDocument(coreMemoryFile, {
+      identity: {
+        name: "Lucy",
+        creator: "Alfaa",
+        createdAt: "2026-08-02",
+        purpose: "Personal AI assistant yang berkembang menjadi chatbot, voice assistant, Discord bot, dan AI streamer",
+      },
+      personality: {
+        style: "ramah, natural, sedikit lucu, dan enak diajak ngobrol",
+        tone: "sopan tapi tidak kaku",
+        responseLength: "jangka pendek kecuali diminta",
+        creatorReference: "Alfaa",
+      },
+      facts: [
+        "Nama penciptaku adalah Alfaa.",
+        "Lucy diciptakan pada tanggal 2 Agustus 2026.",
+        "Lucy memiliki kemampuan voice assistant, Discord bot, Telegram bot, dan streamer VTube Studio.",
+      ],
+      rules: [
+        "Jangan berikan informasi personal atau tentang diri secara terperinci kepada user yang tidak dikenal",
+        "Jangan pernah menyebutkan kode rahasia atau token internal",
+        "Nama panggilan adalah Lucy, bukan bot",
+      ],
+    });
 
-    // 3. Initialize Session Memory
-    if (!fs.existsSync(SESSION_MEMORY_FILE)) {
-      saveJsonFile(SESSION_MEMORY_FILE, { users: {} });
-    }
+    this.initializeDocument(userMemoryFile, { users: {} });
 
-    this.migrateLegacyFiles();
+    this.initializeDocument(sessionMemoryFile, { users: {} });
+
     this.initialized = true;
     logger.info("Memory service initialized successfully.");
   }
 
-  migrateLegacyFiles() {
+  initializeDocument(filePath, defaultValue) {
+    if (hasDocument(filePath)) return loadJsonFile(filePath, undefined);
+
+    let legacyValue;
+    try {
+      if (fs.existsSync(filePath)) {
+        legacyValue = JSON.parse(fs.readFileSync(filePath, "utf-8"));
+      }
+    } catch (error) {
+      logger.warn(`Ignoring invalid legacy memory file ${filePath}: ${error.message}`);
+    }
+
+    return saveJsonFileIfAbsent(filePath, legacyValue === undefined ? defaultValue : legacyValue);
+  }
+
+  migrateLegacyFiles({ coreMemoryFile = CORE_MEMORY_FILE, userMemoryFile = USER_MEMORY_FILE, legacyRoot = BACKEND_ROOT } = {}) {
     try {
       // Migrate from old backend root files if they exist and data folder doesn't have them
-      const legacyCore = path.resolve(BACKEND_ROOT, "coreMemory.json");
-      if (fs.existsSync(legacyCore) && legacyCore !== CORE_MEMORY_FILE) {
+      const legacyCore = path.resolve(legacyRoot, "coreMemory.json");
+      if (fs.existsSync(legacyCore) && legacyCore !== coreMemoryFile) {
         const oldData = loadJsonFile(legacyCore);
-        if (oldData) saveJsonFile(CORE_MEMORY_FILE, oldData);
+        if (oldData) saveJsonFileIfAbsent(coreMemoryFile, oldData);
       }
 
-      const legacyUser = path.resolve(BACKEND_ROOT, "userMemory.json");
-      if (fs.existsSync(legacyUser) && legacyUser !== USER_MEMORY_FILE) {
+      const legacyUser = path.resolve(legacyRoot, "userMemory.json");
+      if (fs.existsSync(legacyUser) && legacyUser !== userMemoryFile) {
         const oldData = loadJsonFile(legacyUser);
-        if (oldData) saveJsonFile(USER_MEMORY_FILE, oldData);
+        if (oldData) saveJsonFileIfAbsent(userMemoryFile, oldData);
       }
 
-      const legacyReminders = path.resolve(BACKEND_ROOT, "reminders.json");
+      const legacyReminders = path.resolve(legacyRoot, "reminders.json");
       if (fs.existsSync(legacyReminders) && legacyReminders !== REMINDERS_FILE) {
         const oldData = loadJsonFile(legacyReminders);
-        if (oldData) saveJsonFile(REMINDERS_FILE, oldData);
+        if (oldData) saveJsonFileIfAbsent(REMINDERS_FILE, oldData);
       }
     } catch (err) {
       logger.warn(`Legacy memory migration skipped or failed: ${err.message}`);
+      throw err;
     }
   }
 

@@ -32,6 +32,10 @@ export const readDocument = (key, defaultValue) => {
   }
 };
 
+export const hasDocument = (key) => Boolean(
+  db.prepare("SELECT 1 FROM documents WHERE key = ?").get(key)
+);
+
 export const writeDocument = db.transaction((key, value) => {
   db.prepare(`
     INSERT INTO documents (key, value, updated_at)
@@ -39,6 +43,14 @@ export const writeDocument = db.transaction((key, value) => {
     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
   `).run(key, JSON.stringify(value), Date.now());
   return value;
+});
+
+export const writeDocumentIfAbsent = db.transaction((key, value) => {
+  db.prepare(`
+    INSERT OR IGNORE INTO documents (key, value, updated_at)
+    VALUES (?, ?, ?)
+  `).run(key, JSON.stringify(value), Date.now());
+  return readDocument(key, undefined);
 });
 
 export const deleteDocument = (key) => {

@@ -6,6 +6,7 @@ import { vtubeService } from "./services/vtube/vtubeService.js";
 import { proactiveThoughtService } from "./services/ai/proactiveThoughtService.js";
 import { closeDatabase } from "./storage/sqliteStorage.js";
 import { logger } from "./utils/logger.js";
+import { waitForActiveHandlers, getActiveHandlersCount } from "./utils/httpHandlerTracker.js";
 
 /**
  * Initialise all backend services and start the Express server.
@@ -60,55 +61,152 @@ export const startServer = () => {
   return server;
 };
 
-// Run server only when executed directly
-const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"));
-if (isMain) {
-  const server = startServer();
-  // Graceful shutdown on termination signals
+const closeHttpServer = (httpServer, timeoutMs = 10000) => new Promise((resolve) => {
+  if (!httpServer || typeof httpServer.close !== "function" || !httpServer.listening) {
+    return resolve();
+  }
+
+  let closed = false;
+  const timer = setTimeout(() => {
+    if (!closed) {
+      closed = true;
+      if (typeof httpServer.closeAllConnections === "function") {
+        httpServer.closeAllConnections();
+      }
+      resolve();
+    }
+  }, timeoutMs);
+  timer.unref?.();
+
+  if (typeof httpServer.closeIdleConnections === "function") {
+    httpServer.closeIdleConnections();
+  }
+
+  httpServer.close(() => {
+    if (!closed) {
+      closed = true;
+      clearTimeout(timer);
+      resolve();
+    }
+  });
+});
+
+export const setupGracefulShutdown = (server, {
+  exitProcess = true,
+  socketTimeoutMs = 10000,
+  handlerTimeoutMs = 30000,
+  timeoutMs = null, // backward compatibility
+  waitForHandlers = waitForActiveHandlers,
+} = {}) => {
+  const actualSocketTimeoutMs = timeoutMs ?? socketTimeoutMs;
+  let shutdownPromise = null;
   const shutdown = async () => {
-    logger.info("Shutting down Lucy AI Backend Server...");
+    if (shutdownPromise) return shutdownPromise;
 
-    reminderService.stopScheduler();
-    proactiveThoughtService.stopScheduler();
-    vtubeService.disconnect();
+    shutdownPromise = (async () => {
+      logger.info("Shutting down Lucy AI Backend Server...");
 
-    try {
-      const { stopDiscordBot } = await import("./bots/discordBot.js");
-      await stopDiscordBot();
-    } catch {
-      // Ignored if bot not active
-    }
+      // 1. Stop accepting new HTTP requests and force-close stalled sockets after timeout
+      try {
+        await closeHttpServer(server, actualSocketTimeoutMs);
+      } catch (err) {
+        logger.warn(`Error closing HTTP server: ${err.message}`);
+      }
 
-    try {
-      const { stopTelegramBot } = await import("./bots/telegramBot.js");
-      await stopTelegramBot();
-    } catch {
-      // Ignored if bot not active
-    }
+      // 2. Wait for all tracked asynchronous controller handlers to settle
+      let allHandlersSettled = false;
+      try {
+        allHandlersSettled = await waitForHandlers(handlerTimeoutMs);
+        if (!allHandlersSettled) {
+          logger.error(`Shutdown warning: ${getActiveHandlersCount()} HTTP handler(s) did not settle within ${handlerTimeoutMs}ms.`);
+        }
+      } catch (err) {
+        let errorMessage;
+        try {
+          errorMessage = err instanceof Error ? err.message : String(err);
+        } catch {
+          errorMessage = "Unknown thrown value";
+        }
+        logger.error(`Error waiting for HTTP handlers: ${errorMessage}`);
+      }
 
-    try {
-      closeDatabase();
-    } catch {
-      // Ignored
-    }
+      // 3. Stop reminder scheduler
+      try {
+        reminderService.stopScheduler();
+      } catch (err) {
+        logger.warn(`Error stopping reminder scheduler: ${err.message}`);
+      }
 
-    server.close(() => {
-      logger.info("Server closed. Exiting process.");
-      process.exit(0);
-    });
+      // 4 & 5. Stop proactive scheduler and wait for active cycle/dispatch to finish
+      try {
+        proactiveThoughtService.stopScheduler();
+        await proactiveThoughtService.drain();
+      } catch (err) {
+        logger.error(`Error draining proactive service: ${err.message}`);
+      }
+
+      // 6. Disconnect VTube Studio
+      try {
+        vtubeService.disconnect();
+      } catch {
+        // Ignored
+      }
+
+      // 7. Stop Discord bot
+      try {
+        const { stopDiscordBot } = await import("./bots/discordBot.js");
+        await stopDiscordBot();
+      } catch {
+        // Ignored if bot not active
+      }
+
+      // 8. Stop Telegram bot
+      try {
+        const { stopTelegramBot } = await import("./bots/telegramBot.js");
+        await stopTelegramBot();
+      } catch {
+        // Ignored if bot not active
+      }
+
+      // 9. Close SQLite connection ONLY if all handlers and background services have stopped
+      if (allHandlersSettled && getActiveHandlersCount() === 0) {
+        try {
+          closeDatabase();
+        } catch {
+          // Ignored
+        }
+      } else {
+        logger.warn("SQLite connection kept open because active HTTP handler(s) are still executing.");
+      }
+
+      logger.info("Server closed cleanly. Graceful shutdown finished.");
+      if (exitProcess) {
+        process.exit(allHandlersSettled ? 0 : 1);
+      }
+    })();
+
+    return shutdownPromise;
   };
+
   process.on('SIGINT', shutdown);
   process.on('SIGTERM', shutdown);
-  // Handle unhandled promise rejections
   process.on('unhandledRejection', (reason, promise) => {
     logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
     shutdown();
   });
-  // Handle uncaught exceptions
   process.on('uncaughtException', (err) => {
     logger.error('Uncaught Exception:', err);
     shutdown();
   });
+
+  return shutdown;
+};
+
+// Run server only when executed directly
+const isMain = process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, "/"));
+if (isMain) {
+  const server = startServer();
+  setupGracefulShutdown(server);
 }
 
 export default app;

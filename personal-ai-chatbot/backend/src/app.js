@@ -5,6 +5,10 @@ import morgan from "morgan";
 import { config } from "./config/env.js";
 import { errorHandler } from "./middlewares/errorHandler.middleware.js";
 import { NotFoundError } from "./utils/appError.js";
+import { initHttpHandlerTracking } from "./utils/httpHandlerTracker.js";
+
+// Initialize global handler tracking for async route promises
+initHttpHandlerTracking();
 
 // Routes
 import authRoutes from "./routes/auth.routes.js";

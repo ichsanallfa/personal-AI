@@ -1,7 +1,7 @@
 import fs from "fs";
 import { logger } from "../utils/logger.js";
 import { ensureDataDirectories } from "../config/paths.js";
-import { readDocument, writeDocument, deleteDocument } from "./sqliteStorage.js";
+import { readDocument, writeDocument, writeDocumentIfAbsent, deleteDocument } from "./sqliteStorage.js";
 
 export const loadJsonFile = (filePath, defaultValue = null) => {
   const stored = readDocument(filePath, undefined);
@@ -26,6 +26,15 @@ export const saveJsonFile = (filePath, data) => {
   } catch (error) {
     logger.error(`Failed to save JSON to ${filePath}: ${error.message}`);
     return false;
+  }
+};
+
+export const saveJsonFileIfAbsent = (filePath, data) => {
+  try {
+    return writeDocumentIfAbsent(filePath, data);
+  } catch (error) {
+    logger.error(`Failed to initialize JSON document ${filePath}: ${error.message}`);
+    throw error;
   }
 };
 
