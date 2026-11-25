@@ -556,7 +556,10 @@ Definitions:
   - If external outcome is resolved as `confirmed_failure`, but required protocol-integrity investigation/containment remains incomplete (`disposition != contained`): retry is prohibited. In the absence of an explicit owner-approved policy permitting retry on an uncontained integrity breach, the system fails closed (retry prohibited pending owner decision).
   - If external outcome is resolved (`confirmed_failure` covering all submissions) AND required integrity containment is established (`disposition = contained` under owner policy) AND all standard retry guards pass (deadline active, budget remaining, cancellation absent, permission valid): retry may be authorized under existing policy.
   - The historical existence of an anomaly record in audit history alone does NOT block an otherwise authorized operation if both external-effect uncertainty is resolved AND the required protocol-integrity disposition is established.
-- **`not_started` (External-Effect Outcome):** Describes the external-operation fact strictly requiring that: (1) no relevant backend invocation permit was ever successfully committed for any operation of this target; (2) complete and reliable durable protocol history exists for all relevant operations and execution paths; (3) NO adapter invocation occurred; (4) NO transport handoff occurred; (5) NO actual transport transmission/submission occurred; (6) NO network activity indicates a possible provider request; (7) NO provider response or reconciliation evidence indicates a possible request; (8) no applicable protocol-integrity anomaly affects this determination; and (9) evidence does not conflict. A committed marker followed by worker process termination, a permit becoming `RESOLVED`, or provider idempotency does NOT establish `not_started`. It is an external-effect conclusion, not proof that all local authorization paths are closed or that another worker may begin a replacement attempt.
+- **`not_started` (External-Effect Outcome — Target-Level Evaluation):** A target-level historical conclusion, never inferred from a single operation group's absence of activity. Evaluation proceeds in two layers:
+  - *Layer 1 — Operation Group Normalization:* Each operation group is independently evaluated using its own permit history, adapter invocation, transport handoff, actual transmission, network activity, provider evidence, contradictory evidence, and protocol anomaly records. A group with no external activity contributes evidence toward `not_started` for that group, but does NOT by itself establish target-level `not_started`.
+  - *Layer 2 — Target-Level `not_started` Evaluation:* `not_started` is permitted at the target level only when ALL nine conditions are satisfied across ALL operation groups and execution paths: (1) no relevant backend invocation permit was ever successfully committed for any operation of this target; (2) complete and reliable durable protocol history exists for all relevant operations and execution paths; (3) NO adapter invocation occurred; (4) NO transport handoff occurred; (5) NO actual transport transmission/submission occurred; (6) NO network activity indicates a possible provider request; (7) NO provider response or reconciliation evidence indicates a possible request; (8) no applicable protocol-integrity anomaly affects this determination; and (9) evidence does not conflict. When history is incomplete or evidence conflicts, the result MUST remain `unknown`.
+  - A committed marker followed by worker process termination, a permit becoming `RESOLVED`, or provider idempotency does NOT establish `not_started`. It is an external-effect conclusion, not proof that all local authorization paths are closed or that another worker may begin a replacement attempt.
 - **Deterministic Authorization-Path Safety Predicate:** A rebuildable, derived safety predicate (not a mutable lifecycle column) evaluated across two distinct operational dimensions:
   1. *Pre-Marker Authorization Path (Answers: Can an existing old worker/claim generation still successfully commit an invocation permit?):*
      - `CLOSED`: No existing old claim generation can commit the marker. This includes: (a) a never-claimed dispatch with no prior worker authorization path; (b) a dispatch in `queued` or `retry_wait` with no active old claim; and (c) a prior claim generation proven fenced by a confirmed committed SQLite generation increment. A `CLOSED` pre-marker path allows fresh initial or replacement claim creation under ordinary claim policy; it does NOT mean a fresh claim is prohibited.
@@ -577,7 +580,7 @@ Definitions:
   4. *Replay Overlap Safety:* Derived predicate (`true` / `false`) evaluating whether a duplicate request is guaranteed safe against all possible overlap windows under verified provider deduplication.
   5. *Replay Authorization Decision:* Operational scheduling decision (`PROHIBITED`, `ALLOWED_BRANCH_A`, `ALLOWED_BRANCH_B`, `DENIED`). Replay authorization is evaluated independently and is NOT hidden inside target lifecycle state.
 - **Canonical Re-Authorization Guard (Operation-Group-Scoped):** Replay authorization is evaluated and emitted strictly per operation group (`replay_authorization(target_id, operation_group_id)`), never as an unconstrained target-wide blanket. A replacement invocation permit for an operation group can be authorized only under one of two mutually exclusive safe branches:
-  - *Branch A (Standard non-execution path per operation group):* Pre-Marker Path is `CLOSED`; Committed Permit Exercise Path across all relevant attempts for this group is `NONE` or `RESOLVED`; External-Effect Resolution for this group is `confirmed_failure` covering all possible submissions across all paths; Protocol-Integrity Disposition is `contained` (or no anomaly exists); and all 16 safe retry requirements pass under `branch_a_retry_authorized(target, group)`. Replay authorization is `ALLOWED_BRANCH_A(group.id)`. (Target delivery state becomes `pending` if safe work is queued or in `retry_wait`, or `failed` if terminal).
+  - *Branch A (Standard non-execution path per operation group):* Pre-Marker Path is `CLOSED`; Committed Permit Exercise Path across all relevant attempts for this group is `NONE` or `RESOLVED`; External-Effect Resolution for this group is `confirmed_failure` covering all possible submissions across all paths; Protocol-Integrity Disposition is `contained` (or no anomaly exists); and all 17 safe retry requirements pass under `branch_a_retry_authorized(target, group)`. Replay authorization is `ALLOWED_BRANCH_A(group.id)`. (Target delivery state becomes `pending` if safe work is queued or in `retry_wait`, or `failed` if terminal).
   - *Branch B (Idempotent replay path per operation group):* Pre-Marker Path is `CLOSED`; Replay Overlap Safety is conclusively established for this exact operation group (`replay_overlap_safety(target_id, group_id) == true`); Protocol-Integrity Disposition is `contained` (or no anomaly exists); and all applicable standard guards pass (`branch_b_replay_authorized(target, group)`). Replay authorization is `ALLOWED_BRANCH_B(group.id)`. In this branch, previous permits remain factually `POSSIBLY_EXERCISABLE`, external effect for this group remains `unknown`, and Effective Target Delivery State REMAINS `unknown` (NEVER `pending`); replay is duplicate-safe, not proof of prior non-execution. Replay authorization for this group strictly does NOT authorize replay for any other operation group on the target.
   If neither Branch A nor Branch B is fully satisfied for an operation group, re-authorization for that group is strictly `DENIED` (or `PROHIBITED` if the group is accepted).
 - **After start-marker commit:** Worker termination or crash alone cannot return that operation to `not_started`; absent trusted provider outcome, the external effect remains `unknown`.
@@ -615,24 +618,28 @@ Equivalent reference pseudocode (the ordered rules above are normative):
 ```text
 // Helper functions for safe retry and idempotent replay authorization
 function branch_a_retry_authorized(target, group):
-   // Verifies all 16 Safe Retry Requirements strictly for this operation group:
+   // Verifies all 17 Safe Retry Requirements strictly for this operation group.
+   // Returns ALLOWED_BRANCH_A only when every guard passes; any failure returns DENIED or PROHIBITED.
+   // Three distinct budgets are maintained: provider-attempt budget, transport retransmission budget,
+   // and operational recovery budget. They MUST NOT be collapsed into one generic retry counter.
    return (
-      pre_marker_path == CLOSED AND
-      group.permit_exercise_path in (NONE, RESOLVED) AND
-      group.external_effect == confirmed_failure AND  // covers all possible submissions across all paths
-      (no_anomaly_exists OR group.integrity_disposition == contained_under_owner_policy) AND
-      group.provider_response_trustworthy == true AND
-      group.failure_category_is_retryable == true AND  // transient failure
-      group.permanent_rejection_resolved == true AND
-      group.retry_after_delay_satisfied == true AND  // minimum wait not shortened
-      group.backoff_and_jitter_schedule_satisfied == true AND
-      target.delivery_deadline_at > authorization_decided_at AND  // deadline active
-      target.dispatch_not_cancelled == true AND
-      target.permissions_and_configuration_valid == true AND
-      target.provider_attempt_count < target.max_provider_attempts AND  // backend attempt budget
-      target.transport_reservation_budget_remaining == true AND  // transport retransmission budget
-      target.operational_recovery_budget_remaining == true AND  // operational claim budget
-      all_concurrency_fencing_guards_pass_and_no_contradictory_evidence == true
+      pre_marker_path == CLOSED AND                                       // 1. Pre-marker path closed
+      group.permit_exercise_path in (NONE, RESOLVED) AND                  // 2. All relevant permits resolved
+      group.external_effect == confirmed_failure AND                      // 3. Confirmed failure covers all submissions
+      (no_anomaly_exists OR group.integrity_disposition == contained_under_owner_policy) AND  // 4. Integrity contained
+      group.provider_response_trustworthy == true AND                     // 5. Provider evidence trustworthy
+      group.failure_category_is_retryable == true AND                     // 6. Retryable failure category
+      group.permanent_rejection_resolved == true AND                      // 7. Permanent rejection cause corrected
+      group.retry_after_delay_satisfied == true AND                       // 8. Retry-After respected as minimum
+      group.backoff_and_jitter_schedule_satisfied == true AND             // 9. Backoff/jitter satisfied
+      target.delivery_deadline_at > authorization_decided_at AND          // 10. Deadline active
+      target.dispatch_not_cancelled == true AND                           // 11. Not cancelled
+      target.permissions_and_configuration_valid == true AND              // 12. Permissions/config valid
+      target.provider_attempt_count < target.max_provider_attempts AND    // 13. Provider-attempt budget
+      target.transport_reservation_budget_remaining == true AND           // 14. Transport retransmission budget
+      target.operational_recovery_budget_remaining == true AND            // 15. Operational recovery budget
+      all_concurrency_fencing_guards_pass == true AND                     // 16. Fencing/concurrency/idempotency guards
+      no_contradictory_evidence_and_no_unresolved_group_blocks_retry == true  // 17. No contradictory evidence; no unresolved group prohibits retry
    )
 
 function branch_b_replay_authorized(target, group):
@@ -1873,6 +1880,12 @@ Owner statuses are supplied by project context; no further approval is inferred.
 - **Finding C19-IR-P2-01 (Pre-Marker UNCERTAIN recovery hold, deadline, and cancellation precedence):** Section 8.1 algorithm Step 6 & 8, pseudocode, decision tables, and Point 8 detail Cases A, B, and C. While a confirmed marker-absent pre-marker path is `UNCERTAIN`, target remains `pending` in recovery hold even after deadline expires (authorizing NO new work); once fencing confirms path `CLOSED`, target transitions to `failed` (`delivery_deadline_expired`) or `cancelled` without extending deadline. Ambiguous marker commit is never treated as marker-absent recovery. *Status:* ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
 - **Finding C19-IR-P2-02 (Authoritative reference pseudocode equivalence):** Section 8.1 retains exactly one clean, authoritative reference pseudocode block 1-to-1 equivalent to the 11-step normative algorithm, covering all states, helper predicates, recovery holds, and precedence rules. *Status:* ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
 - **Finding C19-IR-P2-03 (Normative scope within proposed blueprint):** Added Section 1.3 explicitly distinguishing internal normative consistency of the proposed blueprint from owner acceptance of D-12–D-15 and Phase 2 implementation authorization. *Status:* ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
+- **Finding C19-FR-P1-01 (Branch B replay authorization must be operation-group-scoped):** Section 8.1 Definitions, Pseudocode, and state tables explicitly scope Replay Overlap Safety and Replay Authorization to `operation_group_id`. Authorization for one group never grants authority for another. Group A accepted / Group B unknown scenario explicitly represented. *Status:* ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
+- **Finding C19-FR-P1-02 (Branch A must enforce every safe retry requirement):** Section 8.1 `branch_a_retry_authorized` expanded to 17 individually numbered guards with three distinct budgets (provider-attempt, transport retransmission, operational recovery). Guard 17 covers unresolved groups/anomalies blocking retry. *Status:* ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
+- **Finding C19-FR-P2-01 (Recovery hold, cancellation, deadline, and pseudocode equivalence):** Section 8.1 Algorithm Step 6 and Pseudocode Condition 3 enforce recovery hold without eligibility prerequisite; hold precedes cancellation and deadline; once `CLOSED`, re-evaluate per canonical precedence. 11-step equivalence mapping verified. *Status:* ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
+- **Finding C19-FR-P2-02 (Strict `not_started` must be evaluated at target level):** Section 8.1 Definitions restructured `not_started` into Layer 1 (operation-group normalization) and Layer 2 (target-level, all nine conditions across all groups). One group's absence of activity does not establish target `not_started`. *Status:* ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
+- **Finding C19-FR-P2-03 (Correct test matrix execution status):** Revision Report Section E relabeled all consistency statuses; Section E.2 added 20-scenario Logical Walkthrough Matrix labeled `AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED — PENDING INDEPENDENT REVIEW`. No runtime execution claimed. *Status:* ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
+- **Finding C19-FR-P2-04 (Document integrity report consistency):** Revision Report Section H cleaned: duplicate subsections removed, hashes recomputed, paths consistent, Git state accurately described, Revision Report SHA-256 reported externally. *Status:* ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
 
 ## 16. Current Project Status and Next Authorized Task
 

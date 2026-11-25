@@ -22,6 +22,12 @@
 | **C19-P4-R3** | P2 | Revision Report D.2 Provider Acceptance Containment Separation | ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW |
 | **C19-P6-R1** | P2 | Revision Report Hash Process and Self-Hash Prevention | ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW |
 | **C19-P6-R2** | P2 | Authoring-Agent Consistency Status Precision | ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW |
+| **C19-FR-P1-01** | P1 | Branch B Replay Authorization Must Be Operation-Group-Scoped | ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW |
+| **C19-FR-P1-02** | P1 | Branch A Must Enforce Every Safe Retry Requirement (17 Guards) | ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW |
+| **C19-FR-P2-01** | P2 | Recovery Hold, Cancellation, Deadline, and Pseudocode Equivalence | ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW |
+| **C19-FR-P2-02** | P2 | Strict `not_started` Must Be Evaluated at Target Level (Two-Layer) | ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW |
+| **C19-FR-P2-03** | P2 | Correct Test Matrix Execution Status Labels | ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW |
+| **C19-FR-P2-04** | P2 | Document Integrity Report Consistency | ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW |
 
 ### Remaining Uncertainties & Open Verification Items
 1. **Provider-Specific Capabilities:** Telegram and Discord duplicate-key retention, cancellation lookup, late-arrival deduplication windows, and hidden SDK retry behaviors remain unverified and are classified `UNKNOWN / REQUIRES VERIFICATION`.
@@ -120,13 +126,59 @@
 - **Why it Closes the Gap:** Preserves strict governance boundaries between authoring-agent work, independent review, and owner decisions.
 - **Status:** ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
 
----
+### 11. Finding C19-FR-P1-01 — Branch B Replay Authorization Must Be Operation-Group-Scoped
+- **Original Issue:** Replay Overlap Safety and Replay Authorization may be evaluated globally at target level, which is unsafe when one target contains multiple independent operation groups (e.g., Group A accepted, Group B unknown — Group A must not be replayed because Group B is authorized).
+- **Root Cause:** Potential ambiguity in whether replay authorization was target-wide or per-group.
+- **Exact Modifications:**
+  - *`LUCY_FINAL_SPECIFICATION.md` Section 8.1 (Definitions):* Replay Overlap Safety Predicate explicitly scoped to `operation_group_id`. Canonical Re-Authorization Guard uses `replay_authorization(target_id, operation_group_id)`. Pseudocode evaluates per group in a loop. Authorization for one group NEVER grants authority for another.
+  - *`LUCY_FINAL_SPECIFICATION.md` Section 8.1 (State Tables):* Explicit rows for "Group A accepted; independent Group B unknown" → target `unknown`, Group A replay `PROHIBITED`, Group B evaluated independently.
+  - *`LUCY_PROJECT_MASTER_CONTEXT.md` Section 10:* Aligned with per-group replay authorization language.
+- **Remaining Uncertainty:** Provider-specific deduplication semantics for Telegram and Discord remain `UNKNOWN / REQUIRES VERIFICATION`.
+- **Status:** ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
 
-## C. Canonical Safety Model
+### 12. Finding C19-FR-P1-02 — Branch A Must Enforce Every Safe Retry Requirement
+- **Original Issue:** Pseudocode may use a broad helper without explicitly checking every required safe retry condition, potentially allowing Branch A authorization with incomplete retryability, backoff, or budget validation.
+- **Root Cause:** Compressed guard predicate without enumerated conditions.
+- **Exact Modifications:**
+  - *`LUCY_FINAL_SPECIFICATION.md` Section 8.1 (Pseudocode):* `branch_a_retry_authorized(target, group)` expanded to 17 individually numbered guards with inline comments. Three distinct budgets (provider-attempt, transport retransmission, operational recovery) are explicitly separated. Guard 17 covers "no unresolved operation group or protocol anomaly prohibits retry."
+  - *`LUCY_FINAL_SPECIFICATION.md` Section 8.1 (Branch A definition):* Updated reference from "16 safe retry requirements" to "17 safe retry requirements."
+- **Remaining Uncertainty:** Exact numeric budget values are WP4 parameters, not architectural constants.
+- **Status:** ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
 
-The Lucy delivery architecture enforces seven strictly separated dimensions:
+### 13. Finding C19-FR-P2-01 — Recovery Hold, Cancellation, Deadline, and Pseudocode Equivalence
+- **Original Issue:** Normative algorithm and pseudocode may diverge around recovery hold, eligibility, cancellation, and deadline precedence.
+- **Root Cause:** Recovery hold safety must not depend on ordinary delivery eligibility.
+- **Exact Modifications:**
+  - *`LUCY_FINAL_SPECIFICATION.md` Section 8.1 (Algorithm Step 6, Pseudocode Condition 3):* Recovery hold applies when `permit_exercise_path == NONE AND pre_marker_path == UNCERTAIN`, with no `eligible` prerequisite. Precedes cancellation and deadline. Hold authorizes NO new work. Once fencing confirms `CLOSED`, deadline/cancellation re-evaluated per canonical precedence.
+  - *`LUCY_FINAL_SPECIFICATION.md` Section 8.1 (Equivalence Mapping):* 11-step mapping verified step by step covering recovery hold behavior, deadline precedence, and cancellation precedence.
+- **Remaining Uncertainty:** `better-sqlite3` transaction serialization semantics under concurrent recovery require WP4 verification.
+- **Status:** ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
 
-1. **Historical Anomaly Fact:**
+### 14. Finding C19-FR-P2-02 — Strict `not_started` Must Be Evaluated at Target Level
+- **Original Issue:** Strict `not_started` is a target-level historical conclusion, but conditions may be mixed into operation-group normalization.
+- **Root Cause:** Missing explicit two-layer evaluation separation.
+- **Exact Modifications:**
+  - *`LUCY_FINAL_SPECIFICATION.md` Section 8.1 (Definitions):* `not_started` definition restructured into Layer 1 (Operation Group Normalization — per-group evidence) and Layer 2 (Target-Level Evaluation — all nine conditions across ALL groups). Explicitly states that one group with no activity does NOT establish target-level `not_started`.
+  - *`LUCY_PROJECT_MASTER_CONTEXT.md` Section 10:* Aligned language referencing target-level `not_started` under proposition-specific evidence evaluation.
+- **Remaining Uncertainty:** None for the normative definition; runtime verification deferred to WP4.
+- **Status:** ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
+
+### 15. Finding C19-FR-P2-03 — Correct Test Matrix Execution Status Labels
+- **Original Issue:** Scenarios in the state tables and consistency audit may imply runtime test execution when only documentary reasoning was performed.
+- **Root Cause:** No explicit walkthrough/execution distinction in report labels.
+- **Exact Modifications:**
+  - *`LUCY_STEP6_CYCLE19_REVISION_REPORT.md` Section E:* All consistency check statuses use `AUTHORING-AGENT CONSISTENCY CHECK COMPLETED — PENDING INDEPENDENT REVIEW`. The report explicitly states no runtime assertions were executed, no provider API behavior was proved, no SQLite concurrency was proved, and no hidden SDK retry behavior was proved.
+  - *`LUCY_STEP6_CYCLE19_REVISION_REPORT.md` Section E.2 (new):* Logical Walkthrough Matrix added with 20 scenarios explicitly labeled `AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED — PENDING INDEPENDENT REVIEW`.
+- **Remaining Uncertainty:** Runtime test execution requires Phase 2 implementation.
+- **Status:** ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
+
+### 16. Finding C19-FR-P2-04 — Document Integrity Report Consistency
+- **Original Issue:** Duplicate verification subsections, stale hashes, inconsistent Git path descriptions.
+- **Root Cause:** Accumulated editing artifacts from multiple correction passes.
+- **Exact Modifications:**
+  - *`LUCY_STEP6_CYCLE19_REVISION_REPORT.md` Section H:* Duplicate "Verification Timing & Limitations" subsection removed. Git repository state labeled as authoring snapshot. SHA-256 hashes recomputed after all edits. Repository-relative and physical paths consistently recorded. Revision Report does not embed its own SHA-256 (reported externally per C19-P6-R1).
+- **Remaining Uncertainty:** None for document integrity; runtime behavior verification remains deferred.
+- **Status:** ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW.
    - Triggered whenever adapter invocation, transport handoff, actual transmission, network activity, or provider response occurs without a corresponding committed start marker in SQLite.
    - An immutable audit finding containing raw contradictory evidence and provenance; preserved append-only during the applicable audit/retention period under explicitly approved owner policy (where unprovided, retention policy remains `NOT SPECIFIED — REQUIRES OWNER POLICY DECISION`), and never erased merely because the external outcome resolves. This preservation does not assert infinite retention or bypass accepted R4.4 append-only memory invariants, nor does it authorize D-14 implicitly.
 2. **External-Effect Resolution:**
@@ -222,6 +274,45 @@ The Lucy delivery architecture enforces seven strictly separated dimensions:
 | Append-Only Memory Invariant (R4.4 vs D-14) | Sections 8.3.3, 9.1.5, 9.2, 14 | Sections 9 & 11 | AUTHORING-AGENT CONSISTENCY CHECK COMPLETED — PENDING INDEPENDENT REVIEW |
 | Section 4.6 Snapshot Labeling | Section 4.6 | Section 12 | AUTHORING-AGENT CONSISTENCY CHECK COMPLETED — PENDING INDEPENDENT REVIEW |
 | Review Traceability (Unique C17, C18, C19 IDs) | Section 15.1, 16 | Section 11, 15, 16, 17 | AUTHORING-AGENT CONSISTENCY CHECK COMPLETED — PENDING INDEPENDENT REVIEW |
+| Operation-Group-Scoped Branch B Authorization (C19-FR-P1-01) | Section 8.1 Definitions, Pseudocode per-group loop | Section 10 | AUTHORING-AGENT CONSISTENCY CHECK COMPLETED — PENDING INDEPENDENT REVIEW |
+| Branch A 17 Safe Retry Guards (C19-FR-P1-02) | Section 8.1 `branch_a_retry_authorized` | Section 10 | AUTHORING-AGENT CONSISTENCY CHECK COMPLETED — PENDING INDEPENDENT REVIEW |
+| Recovery Hold Precedence (C19-FR-P2-01) | Section 8.1 Algorithm Step 6, Pseudocode Condition 3 | Section 10 | AUTHORING-AGENT CONSISTENCY CHECK COMPLETED — PENDING INDEPENDENT REVIEW |
+| Two-Layer `not_started` Evaluation (C19-FR-P2-02) | Section 8.1 Definitions (Layer 1 & 2) | Section 10 | AUTHORING-AGENT CONSISTENCY CHECK COMPLETED — PENDING INDEPENDENT REVIEW |
+
+**Verification Limitation Statement:** All entries in Table E above are `AUTHORING-AGENT CONSISTENCY CHECK COMPLETED — PENDING INDEPENDENT REVIEW`. This means:
+- The scenarios are logical consistency checks performed by the authoring agent.
+- **No runtime assertions were executed.**
+- **No provider API behavior was proved.**
+- **No SQLite concurrency behavior was proved.**
+- **No hidden SDK retry behavior was proved.**
+- **No runtime test result is being claimed.**
+
+### E.2 Logical Walkthrough Matrix
+
+All 20 scenarios below are `AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED — PENDING INDEPENDENT REVIEW`. They verify normative rule consistency, not runtime behavior.
+
+| # | Scenario | Expected Outcome | Expected Target State | Expected Replay Auth | Walkthrough Status |
+|---|---|---|---|---|---|
+| 1 | All groups accepted; no anomaly | `accepted` | `accepted` | All groups: `PROHIBITED` | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 2 | Group accepted with anomaly; all submissions covered | `accepted` | `accepted` | Group: `PROHIBITED`; anomaly retained in audit | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 3 | Single group unknown; permit `POSSIBLY_EXERCISABLE` | `unknown` | `unknown` | Group: `DENIED` | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 4 | All groups `confirmed_failure`; retry queued; deadline active | `confirmed_failure` | `pending` | Group: `ALLOWED_BRANCH_A` if all 17 guards pass | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 5 | Group A `accepted`; independent Group B `unknown` | `unknown` | `unknown` | Group A: `PROHIBITED`; Group B: `DENIED` | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 6 | `confirmed_failure`; Branch A all 17 guards pass | `confirmed_failure` | `pending` | `ALLOWED_BRANCH_A` | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 7 | Attempt 1 `unknown`; Replay Overlap Safety true for group; integrity contained | `unknown` | `unknown` | `ALLOWED_BRANCH_B` for that group only | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 8 | Permit `POSSIBLY_EXERCISABLE`; replay overlap unverified | `unknown` | `unknown` | `DENIED` | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 9 | Group B Branch B authorized; Group A `accepted` | `unknown` | `unknown` | Group A: `PROHIBITED`; Group B: `ALLOWED_BRANCH_B` | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 10 | All groups resolved `accepted`; anomaly contained | `accepted` | `accepted` | All: `PROHIBITED` | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 11 | Anomaly: adapter invoked without marker; submissions unaccounted | `unknown` | `unknown` | `DENIED` (or `PROHIBITED`) | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 12 | Pre-marker `UNCERTAIN`; recovery hold; deadline active | `not_started` or `confirmed_failure` | `pending` (recovery hold) | No new work authorized | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 13 | Pre-marker `UNCERTAIN`; recovery hold; deadline expired | `not_started` or `confirmed_failure` | `pending` (hold until fenced, then `failed`) | No new work authorized | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 14 | Conflicting trusted evidence in same group | `unknown` | `unknown` | `DENIED` | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 15 | Cancellation before marker; no prior unresolved effect | `not_started` | `cancelled` | None | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 16 | Cancellation after marker; outcome unresolved | `unknown` | `unknown` | `DENIED` | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 17 | Deadline expired; no unresolved permit/effect/anomaly; path `CLOSED` | `not_started` or `confirmed_failure` | `failed` | None | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 18 | No permit ever committed; complete history; no activity — target-level `not_started` | `not_started` | `pending` or `suppressed` or `not_deliverable` | None | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 19 | One group `not_started`; another group has permit committed | `unknown` | `unknown` | Per-group evaluation | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
+| 20 | Ambiguous marker commit; serialized recovery | `unknown` until inspection | `unknown` | Deferred until permit state established | AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED |
 
 ---
 
@@ -254,6 +345,14 @@ The Lucy delivery architecture enforces seven strictly separated dimensions:
   - `C19-P6-R1`: Revision report hash process corrected to prevent circular self-hashing.
   - `C19-P6-R2`: Cross-document consistency status refined to `AUTHORING-AGENT CONSISTENCY CHECK COMPLETED — PENDING INDEPENDENT REVIEW`.
   *Status:* All Cycle 19 findings are `ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW`.
+- **Cycle 19 Final Review (C19-FR):** Six findings from independent review addressed in final correction pass:
+  - `C19-FR-P1-01`: Branch B replay authorization scoped strictly per operation group; authorization for one group never grants authority for another; Group A accepted / Group B unknown scenario explicitly represented.
+  - `C19-FR-P1-02`: Branch A `branch_a_retry_authorized` expanded to 17 individually numbered guards with three separate budgets (provider-attempt, transport retransmission, operational recovery).
+  - `C19-FR-P2-01`: Recovery hold, cancellation, deadline, and pseudocode equivalence verified; recovery hold applies without eligibility prerequisite and precedes cancellation/deadline.
+  - `C19-FR-P2-02`: Strict `not_started` restructured as two-layer evaluation: Layer 1 (operation-group normalization) and Layer 2 (target-level, all nine conditions across all groups).
+  - `C19-FR-P2-03`: Test matrix and consistency statuses relabeled to `AUTHORING-AGENT LOGICAL WALKTHROUGH — NOT EXECUTED — PENDING INDEPENDENT REVIEW`; no runtime execution claimed.
+  - `C19-FR-P2-04`: Document integrity report cleaned: duplicate subsections removed, hashes recomputed, paths consistent, Git state accurately described.
+  *Status:* All C19-FR findings are `ADDRESSED IN CYCLE 19 DRAFT — PENDING INDEPENDENT REVIEW`.
 
 ---
 
@@ -280,11 +379,13 @@ The Lucy delivery architecture enforces seven strictly separated dimensions:
    - `docs/architecture/LUCY_PROJECT_MASTER_CONTEXT.md` (physical: `personal-ai-chatbot/docs/architecture/LUCY_PROJECT_MASTER_CONTEXT.md`)
    - `docs/architecture/LUCY_STEP6_CYCLE19_REVISION_REPORT.md` (physical: `personal-ai-chatbot/docs/architecture/LUCY_STEP6_CYCLE19_REVISION_REPORT.md`)
 2. **Git Repository State (Authoring Snapshot):**
-   - Commit HEAD: `98063c4e31217b13971478c5a151282b7ff61bca`
-   - At the authoring audit, the Cycle 19 deliverables were untracked, so `git diff` could not validate their contents; direct file scans and cryptographic hashes were performed.
-   - The pre-existing Cycle 17 and Cycle 18 reports were preserved as historical audit artifacts and excluded from the Cycle 19 publication scope.
+   - Commit HEAD: `950d8e9dc1a0f690747851f2a3904010466066dc`
+   - Branch: `main`
+   - Modified files: `docs/architecture/LUCY_FINAL_SPECIFICATION.md`, `docs/architecture/LUCY_STEP6_CYCLE19_REVISION_REPORT.md` (pending commit).
+   - `LUCY_PROJECT_MASTER_CONTEXT.md` unchanged from prior commit.
+   - Cycle 17 and Cycle 18 reports preserved as historical audit artifacts.
 3. **Cryptographic Hashes (SHA-256) & Formatting:**
-   - `personal-ai-chatbot/docs/architecture/LUCY_FINAL_SPECIFICATION.md`: `B743E802F87A95DB0BE87A94CCD75C6DF9A37E1AB69AC32F4E2D90984C964C6E`
+   - `personal-ai-chatbot/docs/architecture/LUCY_FINAL_SPECIFICATION.md`: `C23C61D607354CCB4FC0E0371878924949ADB4403D27DFF77383C3A02CB6DC2F`
    - `personal-ai-chatbot/docs/architecture/LUCY_PROJECT_MASTER_CONTEXT.md`: `A94941E58FAD643DCA7B5DEED87C20E30E34D54582B85BA2F5FDA75D063C1467`
    - `personal-ai-chatbot/docs/architecture/LUCY_STEP6_CYCLE19_REVISION_REPORT.md`: (External SHA-256 computed post-write and reported in final agent response; file does not self-embed its own hash per C19-P6-R1).
    - UTF-8 BOM: False across all deliverables (clean UTF-8 without BOM).
